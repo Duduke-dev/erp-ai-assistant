@@ -1,0 +1,120 @@
+spring:
+  application:
+    name: erp-ai-assistant
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/erp_ai
+    username: ${ERP_DB_USER:duduke}
+    password: ${ERP_DB_PASSWORD:123456}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: erp-hikari
+      maximum-pool-size: 20
+      minimum-idle: 5
+
+  # ===== 数据库迁移 =====
+  # 依赖上必须用 spring-boot-starter-flyway（Boot 4 起 Flyway 自动配置已拆为独立模块）
+  # + flyway-database-postgresql（Flyway 10+ 把数据库支持拆成单独模块）。
+  # 只引 flyway-core 时迁移会完全不执行，且启动日志没有任何 Flyway 输出。
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    # 存量库兼容：此前的表由手工脚本 + Java 初始化器创建，没有 flyway_schema_history。
+    # Flyway 遇到「schema 非空但无历史表」会直接报错，故开启 baseline 且版本设为 0，
+    # 使 V1 起全部脚本正常执行（V1/V2 用 IF NOT EXISTS、V3 用 ON CONFLICT，对存量库安全）。
+    baseline-on-migrate: true
+    baseline-version: 0
+    validate-on-migrate: true
+
+  servlet:
+    multipart:
+      max-file-size: 500MB
+      max-request-size: 550MB
+
+  ai:
+    # 统一 OpenAI 兼容协议。默认指向通义千问 DashScope（chat + embedding 同源）。
+    openai:
+      api-key: ${DASHSCOPE_API_KEY:sk-placeholder}
+      base-url: https://dashscope.aliyuncs.com/compatible-mode
+      chat:
+        options:
+          model: qwen-plus
+      embedding:
+        options:
+          model: text-embedding-v4
+          # MRL 降维到 1024 维：pgvector HNSW 索引列上限 2000 维，
+          # 且此值必须与 vectorstore.pgvector.dimensions 严格一致
+          dimensions: 1024
+
+    # 模型 API 调用重试
+    retry:
+      max-attempts: 3
+
+    vectorstore:
+      pgvector:
+        index-type: hnsw
+        distance-type: cosine_distance
+        # 必须与 embedding 输出维度一致，否则启动即报错
+        dimensions: 1024
+        initialize-schema: true
+
+app:
+  # 多租户列名；MyBatis-Plus 租户插件自动追加该列条件
+  tenant:
+    column: ent_code
+    # 全局配置表（无 ent_code 语义）与租户主表，必须跳过租户条件注入。
+    # tenant 本身有 ent_code 字段，但查询它时尚未建立租户上下文，故一并跳过，
+    # 由业务 SQL 自行带上 ent_code 条件。
+    ignore-tables:
+      - billing_plan
+      - billing_price_rule
+      - llm_tool
+      - tenant
+
+  # 可用模型列表，前端从 /api/models 获取。provider 目前统一为 openai，
+  # base-url 不同的模型（如 DeepSeek）由 ModelRegistry 独立构建 ChatModel
+  models:
+    - id: deepseek-chat
+      label: DeepSeek Chat（通用）
+      provider: openai
+      base-url: https://api.deepseek.com
+      api-key-env: DEEPSEEK_API_KEY
+      model-name: deepseek-chat
+      default: true
+    - id: qwen-plus
+      label: 通义千问 Plus
+      provider: openai
+      base-url: https://dashscope.aliyuncs.com/compatible-mode
+      api-key-env: DASHSCOPE_API_KEY
+      model-name: qwen-plus
+    - id: qwen-max
+      label: 通义千问 Max
+      provider: openai
+      base-url: https://dashscope.aliyuncs.com/compatible-mode
+      api-key-env: DASHSCOPE_API_KEY
+      model-name: qwen-max
+
+  # RAG 检索参数
+  rag:
+    auto-top-k: 5
+    auto-similarity-threshold: 0.5
+    knowledge-top-k: 8
+    knowledge-similarity-threshold: 0.25
+    # 过采样倍数：先取 topK*n 再做资格过滤，上限 24
+    oversample-factor: 3
+    oversample-max: 24
+
+# Sa-Token 配置
+sa-token:
+  token-name: satoken
+  # 默认 1 天；active-timeout 为无操作有效期，-1 表示不限制
+  timeout: 86400
+  active-timeout: -1
+  # 允许同一账号多地登录
+  is-concurrent: true
+  is-share: false
+  token-style: uuid
+  is-log: false
+
+server:
+  port: 8080
