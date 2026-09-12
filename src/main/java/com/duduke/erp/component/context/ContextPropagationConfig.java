@@ -8,11 +8,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.TaskDecorator;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.core.task.support.ContextPropagatingTaskDecorator;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import reactor.core.publisher.Hooks;
 
-import java.util.concurrent.Executor;
+import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * 上下文传播配置。
@@ -32,12 +33,16 @@ public class ContextPropagationConfig {
     }
 
     /**
-     * 带上下文传播的异步执行器，用于文档解析等后台任务。
+     * 带上下文传播的异步执行器，用于 RAG 检索与文档解析等后台任务。
+     * <p>
+     * 拒绝策略显式设为 {@link ThreadPoolExecutor.CallerRunsPolicy}：
+     * 检索是问答链路的必经环节，默认的 AbortPolicy 在队列满时会直接抛异常让本轮问答失败，
+     * 而由调用线程执行只是降级为同步，不会丢结果。
      *
      * @return 异步执行器
      */
     @Bean("ragTaskExecutor")
-    public Executor ragTaskExecutor() {
+    public TaskExecutor ragTaskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(4);
         executor.setMaxPoolSize(16);
@@ -45,6 +50,7 @@ public class ContextPropagationConfig {
         executor.setThreadNamePrefix("rag-task-");
         TaskDecorator decorator = new ContextPropagatingTaskDecorator();
         executor.setTaskDecorator(decorator);
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.initialize();
         return executor;
     }

@@ -33,9 +33,12 @@ spring:
 
   ai:
     # 统一 OpenAI 兼容协议。默认指向通义千问 DashScope（chat + embedding 同源）。
+    # 真实密钥放在 application-local.yml（已 gitignore），用 --spring.profiles.active=local 激活。
     openai:
       api-key: ${DASHSCOPE_API_KEY:sk-placeholder}
-      base-url: https://dashscope.aliyuncs.com/compatible-mode
+      # 必须带 /v1。Spring AI 2.0 使用 OpenAI 官方 SDK，其 base-url 语义为
+      # 「含 /v1 的根路径」，不会再自动补 /v1。
+      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
       chat:
         options:
           model: qwen-plus
@@ -95,14 +98,38 @@ app:
       model-name: qwen-max
 
   # RAG 检索参数
+  # 阈值来自 2026-09-13 的实测标定（DashScope text-embedding-v4，1024 维）：
+  #   相关提问 top1 分数 0.4278 ~ 0.5558
+  #   不相关提问 top1 分数 0.0970 ~ 0.1828
+  # 两者之间存在 0.18 ~ 0.43 的空档，阈值落在区间内即可正确切分。
+  # 注意：这组值不可跨模型复用——参考实现那套 0.5 / 0.25 是按 384 维本地模型调出的，
+  # 直接拿来会把全部相关结果滤掉。换模型后必须重新标定。
   rag:
     auto-top-k: 5
-    auto-similarity-threshold: 0.5
+    # auto 模式带业务 Tool，知识只是辅助，阈值取偏精度一侧
+    auto-similarity-threshold: 0.35
     knowledge-top-k: 8
+    # knowledge 模式纯知识问答，召回优先，阈值取偏召回一侧
     knowledge-similarity-threshold: 0.25
-    # 过采样倍数：先取 topK*n 再做资格过滤，上限 24
+    # 过采样倍数：先取 topK*n 再做资格过滤与去重分散，上限 24
     oversample-factor: 3
     oversample-max: 24
+
+    # 向量身份契约。embedding-model 会写入每个向量的元数据并在检索时强制比对，
+    # 换模型后旧向量自动失效；embedding-dimensions 必须与 pgvector 表结构一致。
+    embedding-model: dashscope/text-embedding-v4@1024
+    embedding-dimensions: 1024
+    embedding-max-tokens: 8192
+
+    # 分块：上限 8192 给了很大余量。600 太粗——中文约合 600~900 字，
+    # 一个向量会混入多个主题导致召回无区分度；300 更接近 RAG 常用粒度（200~500 token）。
+    chunk-size: 300
+    min-chunk-size-chars: 100
+    min-chunk-length-to-embed: 30
+    max-num-chunks: 20000
+
+    max-extracted-chars: 5000000
+    vector-write-batch-size: 100
 
 # Sa-Token 配置
 sa-token:
