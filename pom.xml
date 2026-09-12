@@ -93,6 +93,21 @@
             <artifactId>flyway-database-postgresql</artifactId>
         </dependency>
 
+        <!-- ===== 测试 =====
+             Boot 4 起 MockMvc 相关支持从 spring-boot-starter-test 中拆出，
+             必须单独引 spring-boot-starter-webmvc-test（它内部已聚合 starter-test）。
+             另注意 Boot 4 的包名迁移：
+               @WebMvcTest / @AutoConfigureMockMvc
+                 org.springframework.boot.test.autoconfigure.web.servlet
+                 → org.springframework.boot.webmvc.test.autoconfigure
+               @MockBean → @MockitoBean
+                 → org.springframework.test.context.bean.override.mockito.MockitoBean -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <dependency>
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus-spring-boot4-starter</artifactId>
