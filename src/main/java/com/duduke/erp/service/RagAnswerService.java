@@ -38,6 +38,40 @@ public class RagAnswerService {
     private final KnowledgeBaseService knowledgeBaseService;
 
     /**
+     * 为对话链路装配 Advisor。
+     *
+     * @param knowledgeBaseId 目标知识库，为空时用默认库
+     * @param knowledgeMode   true 走知识问答参数（更宽召回），false 走 auto 模式参数
+     * @return 已装配好租户 / 知识库 / 模型指纹三重过滤的 Advisor
+     */
+    public RetrievalAugmentationAdvisor prepareAdvisor(Long knowledgeBaseId, boolean knowledgeMode) {
+        KnowledgeBase knowledgeBase = this.knowledgeBaseService.resolveActive(knowledgeBaseId);
+        int topK = knowledgeMode
+                ? this.ragProperties.getKnowledgeTopK()
+                : this.ragProperties.getAutoTopK();
+        double threshold = knowledgeMode
+                ? this.ragProperties.getKnowledgeSimilarityThreshold()
+                : this.ragProperties.getAutoSimilarityThreshold();
+        return this.ragAdvisorFactory.create(knowledgeBase.getId(), topK, threshold);
+    }
+
+    /**
+     * 解析本轮实际使用的知识库，供调用方在消息上记录。
+     */
+    public KnowledgeBase resolveKnowledgeBase(Long knowledgeBaseId) {
+        return this.knowledgeBaseService.resolveActive(knowledgeBaseId);
+    }
+
+    private Filter.Expression scopeFilter(Long knowledgeBaseId) {
+        FilterExpressionBuilder builder = new FilterExpressionBuilder();
+        return builder.and(
+                builder.eq("ent_code", TenantContext.requireEntCode()),
+                builder.and(
+                        builder.eq("knowledge_base_id", knowledgeBaseId),
+                        builder.eq("embedding_model", this.ragProperties.getEmbeddingModel()))).build();
+    }
+
+    /**
      * 纯向量检索。
      *
      * @param topK 返回条数，为空时取 auto 模式的默认值
@@ -62,31 +96,6 @@ public class RagAnswerService {
         return this.eligibilityFilter.filter(knowledgeBase.getId(), candidates, effectiveTopK).stream()
                 .map(this::toResult)
                 .toList();
-    }
-
-    /**
-     * 为对话链路装配 Advisor。
-     *
-     * @param knowledgeMode true 走知识问答参数（更宽召回），false 走 auto 模式参数
-     */
-    public RetrievalAugmentationAdvisor prepareAdvisor(Long knowledgeBaseId, boolean knowledgeMode) {
-        KnowledgeBase knowledgeBase = this.knowledgeBaseService.resolveActive(knowledgeBaseId);
-        int topK = knowledgeMode
-                ? this.ragProperties.getKnowledgeTopK()
-                : this.ragProperties.getAutoTopK();
-        double threshold = knowledgeMode
-                ? this.ragProperties.getKnowledgeSimilarityThreshold()
-                : this.ragProperties.getAutoSimilarityThreshold();
-        return this.ragAdvisorFactory.create(knowledgeBase.getId(), topK, threshold);
-    }
-
-    private Filter.Expression scopeFilter(Long knowledgeBaseId) {
-        FilterExpressionBuilder builder = new FilterExpressionBuilder();
-        return builder.and(
-                builder.eq("ent_code", TenantContext.requireEntCode()),
-                builder.and(
-                        builder.eq("knowledge_base_id", knowledgeBaseId),
-                        builder.eq("embedding_model", this.ragProperties.getEmbeddingModel()))).build();
     }
 
     private RagSearchResult toResult(Document document) {

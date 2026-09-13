@@ -74,28 +74,20 @@ app:
       - llm_tool
       - tenant
 
-  # 可用模型列表，前端从 /api/models 获取。provider 目前统一为 openai，
-  # base-url 不同的模型（如 DeepSeek）由 ModelRegistry 独立构建 ChatModel
-  models:
-    - id: deepseek-chat
-      label: DeepSeek Chat（通用）
-      provider: openai
-      base-url: https://api.deepseek.com
-      api-key-env: DEEPSEEK_API_KEY
-      model-name: deepseek-chat
-      default: true
-    - id: qwen-plus
-      label: 通义千问 Plus
-      provider: openai
-      base-url: https://dashscope.aliyuncs.com/compatible-mode
-      api-key-env: DASHSCOPE_API_KEY
-      model-name: qwen-plus
-    - id: qwen-max
-      label: 通义千问 Max
-      provider: openai
-      base-url: https://dashscope.aliyuncs.com/compatible-mode
-      api-key-env: DASHSCOPE_API_KEY
-      model-name: qwen-max
+  # 可用模型列表已收敛为单模型：
+  # 原本规划的 DeepSeek / Qwen 多模型路由（ModelRegistry + AssistantClientProvider
+  # 按 provider 缓存 ChatClient）已舍弃——只有一套 OpenAI 兼容配置时，
+  # 多 provider 缓存是无用复杂度。模型由 spring.ai.openai.chat.options.model 指定。
+  # 后续如需切换模型，改这里的 model 值即可，编排代码不受影响。
+  chat:
+    # 记忆窗口：保留最近 20 条消息（约 10 轮问答）。太小会丢失上下文，
+    # 太大会让每轮请求的 token 成本线性上升。20 是参考实现的取值，先沿用。
+    memory-window-size: 20
+    # 单轮回答上限，0 表示不限制（交由模型默认值）
+    max-output-tokens: 0
+    title-max-length: 40
+    max-question-length: 4000
+    max-messages-per-conversation: 500
 
   # RAG 检索参数
   # 阈值来自 2026-09-13 的实测标定（DashScope text-embedding-v4，1024 维）：

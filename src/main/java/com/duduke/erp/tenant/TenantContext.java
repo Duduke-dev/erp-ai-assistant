@@ -17,9 +17,24 @@ public final class TenantContext {
     private TenantContext() {
     }
 
+    /**
+     * 设置当前请求的租户与用户标识。
+     * <p>
+     * {@code userId} 为 null 时会<b>清除</b>已有的用户标识，而不是保留旧值：
+     * 保留会让「无用户的上下文」继承上一个请求的用户，属于跨请求串号。
+     * 需要只设租户的场景请显式传 null，语义即「租户已知、用户未知」。
+     */
     public static void set(String entCode, Long userId) {
-        ENT_CODE.set(entCode);
-        if (userId != null) {
+        if (entCode == null) {
+            ENT_CODE.remove();
+        }
+        else {
+            ENT_CODE.set(entCode);
+        }
+        if (userId == null) {
+            USER_ID.remove();
+        }
+        else {
             USER_ID.set(userId);
         }
     }

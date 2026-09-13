@@ -36,6 +36,9 @@ public class ChatMessage {
     /** auto / data / knowledge */
     private String mode;
 
+    /** 本轮实际使用的知识库主键，未挂 RAG 时为 null */
+    private String knowledgeBaseId;
+
     private Integer promptTokens;
 
     private Integer completionTokens;
@@ -46,6 +49,15 @@ public class ChatMessage {
 
     /** completed / cancelled / failed */
     private String status;
+
+    /** 失败原因摘要，status = failed 时有值 */
+    private String errorMessage;
+
+    /** 本轮通过资格过滤的召回分片数 */
+    private Integer ragDocCount;
+
+    /** 本轮 Tool 调用次数 */
+    private Integer toolCallsCount;
 
     /** 版本化图表协议 JSON，无需图表或编码失败时为 null */
     @TableField(typeHandler = JsonbStringTypeHandler.class)

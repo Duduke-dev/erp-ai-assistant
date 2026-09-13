@@ -21,6 +21,13 @@ import tools.jackson.databind.ObjectMapper;
  * <p>
  * 回答中的 {@code [n]} 是模型自由生成的，可能与实际证据无关，必须用本轮真实证据做白名单校验。
  * 校验体系与上下文拼装阶段写入的 {@code citation_index} 同源，因此不会错位。
+ * <p>
+ * 三类真实存在的模型偏差，都在本类里被容忍而非报错：
+ * <ol>
+ *   <li>编号越界（多轮下按全局累计计数）→ 按证据条数回绕归位；</li>
+ *   <li>全角 {@code 【n】} 与半角 {@code [n]} 混用 → 两种括号都识别；</li>
+ *   <li>编号出现在代码块或行内代码里（JSON、正则、数组下标）→ 跳过，不当作引用。</li>
+ * </ol>
  */
 @Slf4j
 @Service
@@ -39,7 +46,14 @@ public class RagCitationService {
     /** 元数据中承载引用编号的键，与上下文拼装阶段写入的保持一致 */
     public static final String METADATA_CITATION_INDEX = "citation_index";
 
-    private static final Pattern CITATION_PATTERN = Pattern.compile("\\[(\\d{1,3})]");
+    /**
+     * 引用编号的形态。
+     * <p>
+     * 必须同时接受半角 {@code [1]} 与全角 {@code 【1】}：实测同一模型的同一问题，
+     * 输出形态会在两种之间摆动（中文语境下更容易写成全角）。
+     * 只认半角会导致「回答里明明有编号，citations 却为空」——静默失效，不报错。
+     */
+    private static final Pattern CITATION_PATTERN = Pattern.compile("[\\[【](\\d{1,3})[\\]】]");
 
     private final ObjectMapper objectMapper;
 
@@ -63,21 +77,28 @@ public class RagCitationService {
         int accumulatedBytes = 0;
 
         for (Integer index : extractCitationNumbers(answer)) {
-            if (seen.contains(index) || citations.size() >= MAX_CITATION_COUNT) {
+            if (citations.size() >= MAX_CITATION_COUNT) {
+                break;
+            }
+            if (index < 1) {
                 continue;
             }
-            if (index < 1 || index > allowed.size()) {
-                // 越界编号：模型编造的引用，直接丢弃
+            int normalized = normalizeIndex(index, allowed.size());
+            if (normalized < 1) {
+                // 编号偏离证据范围过远，判定为模型编造，丢弃
                 continue;
             }
-            Document document = allowed.get(index - 1);
-            RagCitation citation = toCitation(index, document);
+            if (seen.contains(normalized)) {
+                continue;
+            }
+            Document document = allowed.get(normalized - 1);
+            RagCitation citation = toCitation(normalized, document);
             int size = jsonSize(citation);
             if (accumulatedBytes + size > MAX_CITATION_JSON_BYTES) {
                 break;
             }
             accumulatedBytes += size;
-            seen.add(index);
+            seen.add(normalized);
             citations.add(citation);
         }
         return citations;
@@ -151,8 +172,31 @@ public class RagCitationService {
         }
     }
 
-    private void collectFromLine(String line, List<Integer> numbers) {
-        int cursor = 0;
+    /**
+     * 把模型给出的编号归位到本轮的合法证据序号。
+     * <p>
+     * 越界是真实存在的模型偏差：多轮对话里模型会把引用编号当成<b>全局累计</b>，
+     * 第二轮明明只有 2 条证据却接着写 {@code [3]}。直接丢弃会让整轮引用凭空消失
+     * （实测表现为「回答里明明有编号，citations 却是空」）。
+     * <p>
+     * 但归位不能无边界：证据只有 1 条时，任何编号都会落到 {@code [1]}，
+     * 等于把白名单校验整个关掉——模型随口写 {@code [99]} 也会被当成有效引用。
+     * 因此只在编号落在「不超过证据条数两倍」的温和区间内才回绕，
+     * 明显离谱的编号仍按编造处理。
+     *
+     * @return 归位后的序号（从 1 开始）；超出容忍区间返回 -1 表示应丢弃
+     */
+    private int normalizeIndex(int index, int evidenceCount) {
+        if (index <= evidenceCount) {
+            return index;
+        }
+        if (index <= evidenceCount * 2) {
+            return (index - 1) % evidenceCount + 1;
+        }
+        return -1;
+    }
+
+    private void collectFromLine(String line, List<Integer> numbers) {        int cursor = 0;
         boolean inInlineCode = false;
         while (cursor < line.length()) {
             char current = line.charAt(cursor);
@@ -161,7 +205,7 @@ public class RagCitationService {
                 cursor++;
                 continue;
             }
-            if (!inInlineCode && current == '[' && !isEscaped(line, cursor)) {
+            if (!inInlineCode && (current == '[' || current == '【') && !isEscaped(line, cursor)) {
                 Matcher matcher = CITATION_PATTERN.matcher(line);
                 matcher.region(cursor, line.length());
                 if (matcher.lookingAt()) {
