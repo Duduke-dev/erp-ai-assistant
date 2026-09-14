@@ -97,6 +97,10 @@ public class AssistantService {
 
     private final ToolCallRecorder toolCallRecorder;
 
+    private final BusinessDataTurnGuard businessDataTurnGuard;
+
+    private final AssistantAnswerSanitizer answerSanitizer;
+
     /**
      * 非流式问答。
      */
@@ -115,8 +119,17 @@ public class AssistantService {
         String traceId = ToolCallRecorder.createTraceId();
         long startedAt = System.currentTimeMillis();
         try {
-            ChatResponse response = invokeModel(conversation, question,
+            ChatResponse firstResponse = invokeModel(conversation, question,
                     knowledgeMode, request.knowledgeBaseId(), traceId);
+            // 守卫：本轮本该查库却没拿到业务数据时，换成「禁止复用历史数字」的提示词重试一次。
+            // 重试沿用同一 traceId，这样重试产生的 Tool 调用会累加进同一条链路记录，
+            // 守卫才能据此判断重试后是否真的拿到了数据。
+            ChatResponse response = this.businessDataTurnGuard.ensureNonStreaming(
+                    firstResponse,
+                    () -> invokeModel(conversation,
+                            this.businessDataTurnGuard.retryQuestion(question),
+                            knowledgeMode, request.knowledgeBaseId(), traceId),
+                    mode, question, traceId);
             return buildSuccessResult(conversation, mode, response, System.currentTimeMillis() - startedAt);
         }
         catch (RuntimeException e) {
@@ -316,9 +329,11 @@ public class AssistantService {
      */
     private AskVO buildSuccessResult(ChatConversation conversation, String mode,
                                      ChatResponse response, long elapsedMs) {
-        String answer = response == null || response.getResult() == null
+        // 净化必须在引用校验之前：内部旁白里的 [n] 编号不该被当成引用
+        String rawAnswer = response == null || response.getResult() == null
                 ? null
                 : response.getResult().getOutput().getText();
+        String answer = rawAnswer == null ? null : this.answerSanitizer.sanitize(rawAnswer);
 
         List<Document> recalled = RagContextFormatter.recalledDocuments();
         List<RagCitation> citations = this.ragCitationService.validate(answer, recalled);

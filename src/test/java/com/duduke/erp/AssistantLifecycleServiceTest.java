@@ -151,7 +151,11 @@ class AssistantLifecycleServiceTest {
      * 因此依赖传 null——调用的方法都不触碰它们。
      */
     private AssistantLifecycleService newService() {
-        return new AssistantLifecycleService(null, null, new com.duduke.erp.config.ChatProperties());
+        // 净化器传真实实例而非 null：它是无依赖的纯文本规则，
+        // 传 null 会让将来万一走到收口路径时直接 NPE，掩盖真正的问题
+        return new AssistantLifecycleService(null, null,
+                new com.duduke.erp.config.ChatProperties(),
+                new com.duduke.erp.service.AssistantAnswerSanitizer());
     }
 
     /** 会话对象仅用于读取标识，本测试不触发落库 */

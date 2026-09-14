@@ -71,6 +71,8 @@ public class AssistantLifecycleService {
 
     private final ChatProperties chatProperties;
 
+    private final AssistantAnswerSanitizer answerSanitizer;
+
     /**
      * 一轮流式回答期间可观测到的运行时数据。
      * <p>
@@ -280,7 +282,6 @@ public class AssistantLifecycleService {
         }
 
         try {
-            String answer = state.content();
             Usage usage = state.usage();
             int promptTokens = usage == null || usage.getPromptTokens() == null
                     ? basePromptTokens : usage.getPromptTokens();
@@ -291,6 +292,12 @@ public class AssistantLifecycleService {
             // 只在成功的轮次里校验引用：失败/取消时回答不完整，
             // 拿半截文本去提取编号会得到残缺引用，不如不发
             boolean usable = STATUS_COMPLETED.equals(status);
+            // 净化只在成功轮次做：取消/失败时文本是半截的，
+            // 此时删旁白可能把仅有的一点内容也删掉，宁可原样保留（status 字段已标明）。
+            // 必须在引用校验之前净化——旁白里的编号不该被当成引用。
+            String answer = usable
+                    ? this.answerSanitizer.sanitize(state.content())
+                    : state.content();
             List<RagCitation> citations = usable
                     ? this.ragCitationService.validate(answer, state.recalled())
                     : List.of();
