@@ -224,7 +224,10 @@ public class AssistantService {
                     conversation.getConversationId());
             return spec;
         }
-        return spec.toolCallbacks(tools)
+        // tools(Object...) 是 Spring AI 2.0 的非弃用入口（toolCallbacks(List) 自 2.0.0 起弃用待移除）。
+        // 传 ToolCallback[] 与旧写法等价：DefaultChatClient 会把数组元素并入同一个 toolCallbacks 列表，
+        // 因此下游 options.getToolCallbacks() 仍能取到这批 Tool。
+        return spec.tools(tools.toArray(new ToolCallback[0]))
                 .toolContext(toolTraceContext(conversation, traceId));
     }
 
@@ -426,7 +429,7 @@ public class AssistantService {
      * 取当前实际使用的模型名，用于记录到会话与消息上。
      */
     private String resolveModelName() {
-        String name = this.chatModel.getDefaultOptions().getModel();
+        String name = this.chatModel.getOptions().getModel();
         return name == null ? "unknown" : name;
     }
 

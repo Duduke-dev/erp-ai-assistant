@@ -43,9 +43,10 @@ import tools.jackson.databind.ObjectMapper;
  *
  * <h3>为什么不需要「按权限缓存 ChatClient」</h3>
  * 参考实现为带 Tool 的调用建了 4 类缓存客户端，缓存键含工具版本号。
- * 本项目不需要：Spring AI 2.0 的 {@code ChatClientRequestSpec} 支持
- * <b>按请求</b>传 {@code toolCallbacks(...)}，所以只要一次构建 ChatClient，
- * 每轮把「过滤后的 Tool 列表」传进去即可——既没有缓存爆炸，也不存在失效问题。
+ * 本项目不需要：Spring AI 2.0 的 {@code ChatClientRequestSpec} 提供非弃用的
+ * <b>按请求</b>传 {@code tools(Object...)} 入口（旧 {@code toolCallbacks(...)} 已弃用），
+ * 所以只要一次构建 ChatClient，每轮把「过滤后的 Tool 列表」传进去即可——
+ * 既没有缓存爆炸，也不存在失效问题。
  */
 @Slf4j
 @Service

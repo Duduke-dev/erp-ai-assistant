@@ -102,13 +102,11 @@ class AutoModeToolWiringTest {
 
     /** 让模型返回一个固定回答，并捕获它收到的 Prompt */
     private ArgumentCaptor<Prompt> stubModel() {
-        // getOptions() 与 getDefaultOptions() 都要 stub：
-        // DefaultChatClientUtils 装配请求时用前者（返回 null 会直接 NPE），
-        // 我们的 resolveModelName() 用后者。
+        // getOptions() 要 stub：DefaultChatClientUtils 装配请求时用它（返回 null 会直接 NPE），
+        // 我们的 resolveModelName() 现在也用 getOptions()（旧 getDefaultOptions() 自 2.0.0 起弃用待移除）。
         ToolCallingChatOptions options =
                 ToolCallingChatOptions.builder().model("test-model").build();
         given(this.chatModel.getOptions()).willReturn(options);
-        given(this.chatModel.getDefaultOptions()).willReturn(options);
 
         ArgumentCaptor<Prompt> captor = ArgumentCaptor.forClass(Prompt.class);
         given(this.chatModel.call(captor.capture()))
