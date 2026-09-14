@@ -1,6 +1,12 @@
 package com.duduke.erp.service;
 
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import cn.dev33.satoken.stp.StpUtil;
 
 import com.duduke.erp.component.springai.AssistantClientProvider;
 import com.duduke.erp.component.springai.ChatMemoryAdvisorFactory;
@@ -13,6 +19,9 @@ import com.duduke.erp.entity.vo.AskVO;
 import com.duduke.erp.entity.vo.ChatMessageVO;
 import com.duduke.erp.entity.vo.ConversationVO;
 import com.duduke.erp.entity.vo.RagCitation;
+import com.duduke.erp.service.tool.ToolRegistryService;
+import com.duduke.erp.service.tool.trace.ToolCallRecorder;
+import com.duduke.erp.service.tool.trace.ToolTraceKeys;
 import com.duduke.erp.tenant.TenantContext;
 import com.duduke.erp.tenant.TenantContextAccessor;
 
@@ -26,6 +35,7 @@ import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.document.Document;
+import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
@@ -43,13 +53,16 @@ import reactor.core.publisher.Flux;
  *
  * <h3>两种模式</h3>
  * <ul>
- *   <li>{@code auto} —— 默认。挂 RAG（用 auto 参数，阈值偏精度），
- *       后续 M3 会在此基础上加业务 Tool。知识只是辅助。</li>
- *   <li>{@code knowledge} —— 纯知识库问答。用 knowledge 参数（阈值偏召回），
- *       系统提示词换成「只依据资料作答」。</li>
+ *   <li>{@code auto} —— 默认。挂业务 Tool（按当前用户权限过滤），用于查业务数据。</li>
+ *   <li>{@code knowledge} —— 纯知识库问答。挂 RAG（knowledge 参数，阈值偏召回），
+ *       系统提示词换成「只依据资料作答」，<b>不挂 Tool</b>。</li>
  * </ul>
- * M3 之前的 Tool 尚未接入，因此 auto 与 knowledge 目前的差异
- * 体现在 RAG 参数与系统提示词上；Tool 接入后 auto 会额外挂 Tool Calling Advisor。
+ * Tool 与权限过滤见 {@link #streamingCall}。
+ *
+ * <h3>待确认：auto 是否也该挂 RAG</h3>
+ * 设计文档写的是「auto = 业务问答 + 知识辅助」，即 auto 也应有 RAG（阈值偏精度）。
+ * 但当前 {@code streamingCall} 只在 knowledge 模式挂 RAG Advisor。
+ * 这是 M4 遗留，未在本轮改动——改动会同时影响检索口径与 token 成本，需单独确认。
  *
  * <h3>为什么失败也要落库</h3>
  * 助手消息无论成功、被取消还是失败都会写入一条记录（status 区分）。
@@ -80,6 +93,10 @@ public class AssistantService {
 
     private final ChatModel chatModel;
 
+    private final ToolRegistryService toolRegistry;
+
+    private final ToolCallRecorder toolCallRecorder;
+
     /**
      * 非流式问答。
      */
@@ -95,10 +112,11 @@ public class AssistantService {
         // 先落库用户消息：模型调用可能耗时数十秒，等回答一起写会让用户以为消息丢了
         this.chatHistoryService.saveUserMessage(conversation, question, mode);
 
+        String traceId = ToolCallRecorder.createTraceId();
         long startedAt = System.currentTimeMillis();
         try {
             ChatResponse response = invokeModel(conversation, question,
-                    knowledgeMode, request.knowledgeBaseId());
+                    knowledgeMode, request.knowledgeBaseId(), traceId);
             return buildSuccessResult(conversation, mode, response, System.currentTimeMillis() - startedAt);
         }
         catch (RuntimeException e) {
@@ -112,6 +130,7 @@ public class AssistantService {
         finally {
             // 线程复用，必须清理，否则下一次请求会读到本轮证据导致引用串档
             RagContextFormatter.clearRecalledDocuments();
+            this.toolCallRecorder.clearTrace(traceId);
         }
     }
 
@@ -123,8 +142,8 @@ public class AssistantService {
      * 反过来则检索只能看到当前这一句，多轮追问（「那上个月呢」）会检索不到任何东西。
      */
     private ChatResponse invokeModel(ChatConversation conversation, String question,
-                                     boolean knowledgeMode, Long knowledgeBaseId) {
-        return streamingCall(conversation, question, knowledgeMode, knowledgeBaseId)
+                                     boolean knowledgeMode, Long knowledgeBaseId, String traceId) {
+        return streamingCall(conversation, question, knowledgeMode, knowledgeBaseId, traceId)
                 .call()
                 .chatResponse();
     }
@@ -146,27 +165,40 @@ public class AssistantService {
      * 由注册的 {@code TenantContextAccessor} 在每次线程切换时自动恢复。
      */
     public Flux<ChatResponse> streamModel(ChatConversation conversation, String question,
-                                          boolean knowledgeMode, Long knowledgeBaseId) {
+                                          boolean knowledgeMode, Long knowledgeBaseId,
+                                          String traceId) {
         String entCode = TenantContext.getEntCode();
         Long userId = TenantContext.getUserId();
 
-        return streamingCall(conversation, question, knowledgeMode, knowledgeBaseId)
+        return streamingCall(conversation, question, knowledgeMode, knowledgeBaseId, traceId)
                 .stream()
                 .chatResponse()
                 .contextWrite(context -> context.put(
                         TenantContextAccessor.KEY,
-                        new TenantContextAccessor.TenantSnapshot(entCode, userId)));
+                        new TenantContextAccessor.TenantSnapshot(entCode, userId)))
+                // 用完即清，且必须覆盖完成 / 异常 / 取消三条路径——
+                // doFinally 对三者都会触发。漏掉取消的话，用户点「停止」后
+                // 这条 trace 会一直留在聚合器里，下一轮可能读到它。
+                .doFinally(signal -> this.toolCallRecorder.clearTrace(traceId));
     }
 
     /**
-     * 统一的调用装配：系统提示词 + 用户提问 + 记忆 Advisor +（可选）RAG Advisor。
+     * 统一的调用装配：系统提示词 + 用户提问 + 记忆 Advisor +（可选）RAG Advisor +（auto）业务 Tool。
+     * <p>
+     * <b>Tool 只挂 auto 模式</b>：knowledge 是纯知识库问答，不该让模型去查业务数据。
+     * <p>
+     * Tool 用<b>按请求</b>的方式传入而非构建期绑定——Spring AI 2.0 的
+     * {@code ChatClientRequestSpec} 支持 {@code toolCallbacks(List)}，
+     * 所以一个 ChatClient 就够，无需为不同权限组合各建一份客户端。
+     * 传进来的已经是<b>按当前用户权限过滤过</b>的列表：没权限的 Tool 模型根本看不到，
+     * 不会出现「选中了却调不动」的反复重试。
      */
     private ChatClient.ChatClientRequestSpec streamingCall(
             ChatConversation conversation, String question,
-            boolean knowledgeMode, Long knowledgeBaseId) {
+            boolean knowledgeMode, Long knowledgeBaseId, String traceId) {
         MessageChatMemoryAdvisor memoryAdvisor = this.chatMemoryAdvisorFactory.create();
 
-        return this.assistantClientProvider.client()
+        ChatClient.ChatClientRequestSpec spec = this.assistantClientProvider.client()
                 .prompt()
                 .system(knowledgeMode
                         ? this.chatProperties.getKnowledgePrompt()
@@ -180,6 +212,54 @@ public class AssistantService {
                         advisor.advisors(this.ragAnswerService.prepareAdvisor(knowledgeBaseId, true));
                     }
                 });
+
+        if (knowledgeMode) {
+            return spec;
+        }
+
+        List<ToolCallback> tools = this.toolRegistry.snapshot().visibleTo(currentPermissions());
+        // 空列表也要显式跳过：传一个空 tools 数组给模型是毫无意义的噪声
+        if (tools.isEmpty()) {
+            log.warn("本轮无任何可用 Tool：conversationId={}，请检查用户权限配置",
+                    conversation.getConversationId());
+            return spec;
+        }
+        return spec.toolCallbacks(tools)
+                .toolContext(toolTraceContext(conversation, traceId));
+    }
+
+    /**
+     * 当前用户的权限码集合。
+     * <p>
+     * 权限在登录时已写入 Sa-Token 的 User-Session（见 {@code StpInterfaceImpl}），
+     * 这里直接读取，不回查数据库。
+     */
+    private Set<String> currentPermissions() {
+        return new HashSet<>(StpUtil.getPermissionList());
+    }
+
+    /**
+     * 构造传给 Tool 的链路上下文。
+     * <p>
+     * 用 HashMap 而非 {@code Map.of}：后者遇到 null 值直接抛 NPE，
+     * 而租户、用户这些字段在异常路径上确实可能为 null——
+     * 缺一个字段只是流水里少一列的排查信息，不该让整轮问答失败。
+     */
+    private Map<String, Object> toolTraceContext(ChatConversation conversation, String traceId) {
+        Map<String, Object> context = new HashMap<>();
+        context.put(ToolTraceKeys.TRACE_ID, traceId);
+        context.put(ToolTraceKeys.CONVERSATION_ID, conversation.getConversationId());
+        context.put(ToolTraceKeys.MODE, MODE_AUTO);
+        context.put(ToolTraceKeys.MODEL, conversation.getModelId());
+        putIfPresent(context, ToolTraceKeys.ENT_CODE, TenantContext.getEntCode());
+        putIfPresent(context, ToolTraceKeys.USER_ID, TenantContext.getUserId());
+        return context;
+    }
+
+    private void putIfPresent(Map<String, Object> context, String key, Object value) {
+        if (value != null) {
+            context.put(key, value);
+        }
     }
 
     /**
@@ -202,7 +282,8 @@ public class AssistantService {
         this.chatHistoryService.ensureConversationWritable(conversation);
         this.chatHistoryService.saveUserMessage(conversation, question, mode);
         return new StreamPreparation(conversation, question, mode,
-                MODE_KNOWLEDGE.equals(mode), request.knowledgeBaseId());
+                MODE_KNOWLEDGE.equals(mode), request.knowledgeBaseId(),
+                ToolCallRecorder.createTraceId());
     }
 
     /**
@@ -213,13 +294,18 @@ public class AssistantService {
      * @param mode            规范化后的模式
      * @param knowledgeMode   是否知识问答模式
      * @param knowledgeBaseId 请求指定的知识库，为空时由下游回落到默认库
+     * @param traceId         本轮链路 ID。<b>必须随准备结果带出</b>——
+     *                        它和 knowledgeBaseId 一样属于请求级参数，
+     *                        若等到启动流时再另行生成，就会与本轮的 Tool 调用脱节，
+     *                        表现为「调了 Tool 但流水里查不到」，且不报错。
      */
     public record StreamPreparation(
             ChatConversation conversation,
             String question,
             String mode,
             boolean knowledgeMode,
-            Long knowledgeBaseId) {
+            Long knowledgeBaseId,
+            String traceId) {
     }
 
     /**

@@ -156,7 +156,8 @@ public class ChatController {
 
         Disposable subscription = this.assistantService.streamModel(
                         conversation, preparation.question(),
-                        preparation.knowledgeMode(), preparation.knowledgeBaseId())
+                        preparation.knowledgeMode(), preparation.knowledgeBaseId(),
+                        preparation.traceId())
                 .subscribe(
                         response -> handleDelta(emitter, state, response),
                         error -> finishWithError(emitter, state, preparation, startedAt, finalized, error),
