@@ -97,6 +97,8 @@ public class AssistantService {
 
     private final ToolCallRecorder toolCallRecorder;
 
+    private final BusinessDataTurnGuard businessDataTurnGuard;
+
     /**
      * 非流式问答。
      */
@@ -115,8 +117,17 @@ public class AssistantService {
         String traceId = ToolCallRecorder.createTraceId();
         long startedAt = System.currentTimeMillis();
         try {
-            ChatResponse response = invokeModel(conversation, question,
+            ChatResponse firstResponse = invokeModel(conversation, question,
                     knowledgeMode, request.knowledgeBaseId(), traceId);
+            // 守卫：本轮本该查库却没拿到业务数据时，换成「禁止复用历史数字」的提示词重试一次。
+            // 重试沿用同一 traceId，这样本轮的 Tool 调用会累加到同一条链路记录里，
+            // 守卫才能据此判断重试后是否真的拿到了数据。
+            ChatResponse response = this.businessDataTurnGuard.ensureNonStreaming(
+                    firstResponse,
+                    () -> invokeModel(conversation,
+                            this.businessDataTurnGuard.retryQuestion(question),
+                            knowledgeMode, request.knowledgeBaseId(), traceId),
+                    mode, question, traceId);
             return buildSuccessResult(conversation, mode, response, System.currentTimeMillis() - startedAt);
         }
         catch (RuntimeException e) {
