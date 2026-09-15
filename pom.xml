@@ -23,6 +23,10 @@
         <mybatis-plus.version>3.5.17</mybatis-plus.version>
         <sa-token.version>1.46.0</sa-token.version>
         <lombok.version>1.18.46</lombok.version>
+        <!-- AWS SDK v2：仅用于访问 RustFS（S3 兼容）。
+             未交给 Boot BOM 管理，因此显式钉版本；同组件的传递依赖靠下方 BOM 统一，
+             否则 s3 与其内部模块版本错配会在运行期抛 NoSuchMethodError。 -->
+        <aws-sdk.version>2.46.7</aws-sdk.version>
     </properties>
 
     <dependencyManagement>
@@ -31,6 +35,13 @@
                 <groupId>org.springframework.ai</groupId>
                 <artifactId>spring-ai-bom</artifactId>
                 <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>bom</artifactId>
+                <version>${aws-sdk.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -72,6 +83,18 @@
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-tika-document-reader</artifactId>
+        </dependency>
+
+        <!-- ===== M2.5 异步化：对象存储 + 消息队列 ===== -->
+        <!-- S3 客户端（连 RustFS）。版本由上方 AWS BOM 统一，故此处不写 version -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+        </dependency>
+        <!-- 文档解析异步化：上传后投递，消费者解析 + 向量化 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
         </dependency>
 
         <dependency>
@@ -144,12 +167,9 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- Boot 4 切片测试拆分，MockMvc 需要单独引入 -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-webmvc-test</artifactId>
-            <scope>test</scope>
-        </dependency>
+        <!-- 注：spring-boot-starter-webmvc-test 已在本文件上方「测试」段落声明，
+             此处不再重复。下方 starter-test 保留——它虽被 webmvc-test 传递引入，
+             但显式声明能让 JUnit/AssertJ/Mockito 的来源一目了然。 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>

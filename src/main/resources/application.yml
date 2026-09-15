@@ -2,6 +2,19 @@ spring:
   application:
     name: erp-ai-assistant
 
+  # RabbitMQ：文档「上传 → 解析 → 向量化」异步化
+  rabbitmq:
+    host: ${ERP_MQ_HOST:localhost}
+    port: ${ERP_MQ_PORT:5672}
+    username: ${ERP_MQ_USER:erp}
+    password: ${ERP_MQ_PASSWORD:123456}
+    listener:
+      simple:
+        # 必须设 false：默认 true 时，消费抛异常的消息会被立刻重新入队，
+        # 形成「失败→重投→再失败」的热循环，把日志刷爆且挡住后续消息。
+        # 关掉后失败消息走死信队列，由拓扑里的 DLQ 配置承接。
+        default-requeue-rejected: false
+
   datasource:
     url: jdbc:postgresql://localhost:5432/erp_ai
     username: ${ERP_DB_USER:duduke}
@@ -79,6 +92,29 @@ app:
   # 按 provider 缓存 ChatClient）已舍弃——只有一套 OpenAI 兼容配置时，
   # 多 provider 缓存是无用复杂度。模型由 spring.ai.openai.chat.options.model 指定。
   # 后续如需切换模型，改这里的 model 值即可，编排代码不受影响。
+  # 对象存储（RustFS，S3 兼容）
+  storage:
+    # 是 S3 端口 9000，不是控制台端口 9001
+    endpoint: ${ERP_STORAGE_ENDPOINT:http://localhost:9000}
+    access-key: ${ERP_STORAGE_ACCESS_KEY:rustfsadmin}
+    secret-key: ${ERP_STORAGE_SECRET_KEY:rustfsadmin}
+    # RustFS 不校验区域，但 SigV4 签名必须有值，不能省
+    region: us-east-1
+    # 知识库文档原件
+    bucket: erp-knowledge
+    # 预签名上传链接有效期（分钟），短期有效以免转发后长期可用
+    presign-valid-minutes: 15
+
+  # 消息队列（业务侧拓扑命名与开关）
+  mq:
+    document-parse-queue: erp.document.parse
+    document-parse-dlq: erp.document.parse.dlq
+    document-exchange: erp.document
+    document-parse-routing-key: document.parse
+    # 消息队列不可用时切回同步解析的开关，避免「上传」整功能不可用
+    async-enabled: true
+    max-attempts: 3
+
   chat:
     # 记忆窗口：保留最近 20 条消息（约 10 轮问答）。太小会丢失上下文，
     # 太大会让每轮请求的 token 成本线性上升。20 是参考实现的取值，先沿用。
