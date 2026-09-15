@@ -83,10 +83,22 @@ class AssistantLifecycleServiceTest {
     }
 
     @Test
+    @DisplayName("状态必须携带 traceId —— 收口靠它取回本轮图表方案与业务结果")
+    void stateCarriesTraceId() {
+        AssistantLifecycleService service = newService();
+
+        var state = service.newState("trace-xyz");
+
+        assertThat(state.traceId())
+                .as("收口在其它线程上执行，拿不到 ThreadLocal，只能靠状态携带")
+                .isEqualTo("trace-xyz");
+    }
+
+    @Test
     @DisplayName("状态累积拼接增量，空帧不计入")
     void stateAccumulatesDeltas() {
         AssistantLifecycleService service = newService();
-        var state = service.newState();
+        var state = service.newState("trace-test");
 
         String first = service.onDelta(state, frame("库存", 0));
         String second = service.onDelta(state, frame("预警", 0));
@@ -102,7 +114,7 @@ class AssistantLifecycleServiceTest {
     @DisplayName("token 用量保留最后一次有效值，不被后续零值抹掉")
     void stateKeepsLastValidUsage() {
         AssistantLifecycleService service = newService();
-        var state = service.newState();
+        var state = service.newState("trace-test");
 
         // 模拟真实流：前几帧 usage 为 0（或缺失），只有最后一帧带真实用量
         service.onDelta(state, frame("a", 0));
@@ -118,7 +130,7 @@ class AssistantLifecycleServiceTest {
     @DisplayName("召回文档从响应元数据读取，供流结束后校验引用")
     void stateCapturesRecalledDocumentsFromMetadata() {
         AssistantLifecycleService service = newService();
-        var state = service.newState();
+        var state = service.newState("trace-test");
 
         Document doc = Document.builder()
                 .id("d1")
@@ -151,7 +163,15 @@ class AssistantLifecycleServiceTest {
      * 因此依赖传 null——调用的方法都不触碰它们。
      */
     private AssistantLifecycleService newService() {
-        return new AssistantLifecycleService(null, null, new com.duduke.erp.config.ChatProperties());
+        // 净化器传真实实例而非 null：它是无依赖的纯文本规则，
+        // 传 null 会让将来万一走到收口路径时直接 NPE，掩盖真正的问题
+        return new AssistantLifecycleService(null, null,
+                new com.duduke.erp.config.ChatProperties(),
+                new com.duduke.erp.service.AssistantAnswerSanitizer(),
+                new com.duduke.erp.service.chart.ChartPlanToolCallback(
+                        new tools.jackson.databind.ObjectMapper()),
+                new com.duduke.erp.service.chart.ChartCompiler(),
+                new com.duduke.erp.service.chart.ToolResultRecorder());
     }
 
     /** 会话对象仅用于读取标识，本测试不触发落库 */

@@ -40,11 +40,13 @@ public class RagAnswerService {
     /**
      * 为对话链路装配 Advisor。
      *
-     * @param knowledgeBaseId 目标知识库，为空时用默认库
-     * @param knowledgeMode   true 走知识问答参数（更宽召回），false 走 auto 模式参数
+     * @param knowledgeBaseId       目标知识库，为空时用默认库
+     * @param knowledgeMode         true 走知识问答参数（更宽召回），false 走 auto 模式参数
+     * @param previousUserQuestions 会话内历史提问（正序），供检索前改写补全省略式追问
      * @return 已装配好租户 / 知识库 / 模型指纹三重过滤的 Advisor
      */
-    public RetrievalAugmentationAdvisor prepareAdvisor(Long knowledgeBaseId, boolean knowledgeMode) {
+    public RetrievalAugmentationAdvisor prepareAdvisor(Long knowledgeBaseId, boolean knowledgeMode,
+                                                       List<String> previousUserQuestions) {
         KnowledgeBase knowledgeBase = this.knowledgeBaseService.resolveActive(knowledgeBaseId);
         int topK = knowledgeMode
                 ? this.ragProperties.getKnowledgeTopK()
@@ -52,7 +54,8 @@ public class RagAnswerService {
         double threshold = knowledgeMode
                 ? this.ragProperties.getKnowledgeSimilarityThreshold()
                 : this.ragProperties.getAutoSimilarityThreshold();
-        return this.ragAdvisorFactory.create(knowledgeBase.getId(), topK, threshold);
+        return this.ragAdvisorFactory.create(knowledgeBase.getId(), topK, threshold,
+                previousUserQuestions);
     }
 
     /**

@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.rag.Query;
 import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
+import org.springframework.ai.rag.preretrieval.query.transformation.QueryTransformer;
 import org.springframework.ai.rag.retrieval.search.DocumentRetriever;
 import org.springframework.ai.rag.retrieval.search.VectorStoreDocumentRetriever;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -37,16 +38,21 @@ public class RagAdvisorFactory {
 
     private final RagDocumentEligibilityFilter eligibilityFilter;
 
+    private final QueryRewriteService queryRewriteService;
+
     /** 与 RagTaskExecutorConfig 中的 bean 同名，存在多个 TaskExecutor 时按名字注入 */
     private final TaskExecutor ragTaskExecutor;
 
     /**
      * 为一个知识库构造 Advisor。
      *
-     * @param topK      最终返回的分片数
-     * @param threshold 相似度阈值
+     * @param topK                  最终返回的分片数
+     * @param threshold             相似度阈值
+     * @param previousUserQuestions 会话内的历史提问（正序），用于补全省略式追问；
+     *                              为空表示无历史，此时不做改写
      */
-    public RetrievalAugmentationAdvisor create(Long knowledgeBaseId, int topK, double threshold) {
+    public RetrievalAugmentationAdvisor create(Long knowledgeBaseId, int topK, double threshold,
+                                               List<String> previousUserQuestions) {
         if (topK < 1 || topK > this.ragProperties.getOversampleMax()) {
             throw new IllegalArgumentException(
                     "topK 超出允许范围：1 ~ " + this.ragProperties.getOversampleMax());
@@ -73,8 +79,17 @@ public class RagAdvisorFactory {
             return this.eligibilityFilter.filter(knowledgeBaseId, candidates, topK);
         };
 
+        // 检索前改写：把「那上个月呢」这类省略式追问补成可独立检索的查询。
+        // 必须放在检索之前——否则已经用那句无意义的短句跑过一次检索了。
+        QueryTransformer queryRewriter = query -> Query.builder()
+                .text(this.queryRewriteService.rewrite(query.text(), previousUserQuestions))
+                .history(query.history())
+                .context(query.context())
+                .build();
+
         return RetrievalAugmentationAdvisor.builder()
                 .documentRetriever(eligibleRetriever)
+                .queryTransformers(queryRewriter)
                 .queryAugmenter(this.contextFormatter)
                 .taskExecutor(this.ragTaskExecutor)
                 .build();

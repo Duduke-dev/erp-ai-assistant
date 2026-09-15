@@ -2,6 +2,7 @@ package com.duduke.erp;
 
 import java.util.List;
 
+import com.duduke.erp.service.tool.ToolNames;
 import com.duduke.erp.service.tool.ToolPermissionCatalog;
 import com.duduke.erp.service.tool.trace.ToolTraceKeys;
 
@@ -77,6 +78,23 @@ class AutoModeToolWiringTest {
     }
 
     @Test
+    @DisplayName("data 模式同样挂 Tool，且链路上下文记录真实模式（不再是硬编码的 auto）")
+    void dataModeAttachesToolsAndRecordsRealMode() throws Exception {
+        ArgumentCaptor<Prompt> captor = stubModel();
+        String token = login();
+
+        ask(token, "data");
+
+        ToolCallingChatOptions options = optionsOf(captor.getValue());
+        assertThat(options.getToolCallbacks())
+                .as("data 是「必须查库」模式，不挂 Tool 就失去意义")
+                .isNotEmpty();
+        assertThat(options.getToolContext().get(ToolTraceKeys.MODE))
+                .as("模式必须如实记录；早先这里硬编码 auto，data 的调用流水会被记成 auto")
+                .isEqualTo("data");
+    }
+
+    @Test
     @DisplayName("只有模块权限的用户，只看到对应模块的 Tool（权限过滤生效）")
     void filtersToolsByGrantedModules() throws Exception {
         ArgumentCaptor<Prompt> captor = stubModel();
@@ -86,11 +104,21 @@ class AutoModeToolWiringTest {
 
         List<ToolCallback> tools = optionsOf(captor.getValue()).getToolCallbacks();
         // 与注册表快照的过滤口径一致：这里核对的是"装进请求的就是过滤后的"
-        assertThat(tools).isNotEmpty().hasSize(39);
-        assertThat(tools).allSatisfy(tool ->
-                assertThat(ToolPermissionCatalog.forToolName(tool.getToolDefinition().name()))
-                        .as("装进请求的每个 Tool 都必须有权限声明")
-                        .isNotNull());
+        // 39 个业务 Tool + 1 个图表系统 Tool（图表 Tool 不查业务数据，不走权限过滤）
+        assertThat(tools).isNotEmpty().hasSize(40);
+        assertThat(tools).anySatisfy(tool ->
+                assertThat(tool.getToolDefinition().name())
+                        .as("图表 Tool 必须挂上，否则模型无从声明图表")
+                        .isEqualTo(ToolNames.CHART_PLAN));
+        // 图表 Tool 是系统内部工具，没有「数据权限」可言，故从权限校验里排除；
+        // 其余业务 Tool 必须全部有权限声明（fail-closed）
+        assertThat(tools)
+                .filteredOn(tool -> !ToolNames.CHART_PLAN.equals(tool.getToolDefinition().name()))
+                .as("除系统图表 Tool 外，装进请求的每个 Tool 都必须有权限声明")
+                .isNotEmpty()
+                .allSatisfy(tool ->
+                        assertThat(ToolPermissionCatalog.forToolName(tool.getToolDefinition().name()))
+                                .isNotNull());
     }
 
     // knowledge 模式「不挂 Tool」这条断言暂时无法在集成测试里验证：

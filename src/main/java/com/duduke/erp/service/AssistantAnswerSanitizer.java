@@ -2,7 +2,6 @@ package com.duduke.erp.service;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -24,19 +23,23 @@ import org.springframework.stereotype.Component;
  *       标记不存在时不会误伤文本。</li>
  *   <li><b>兼容净化</b>（当前实际生效）：没有标记时，只删除
  *       <b>能够确定为内部过程</b>的段落。判据保守——仅当段落
- *       <b>以</b>旁白句式开头才删，正文里出现相同词组不受影响。</li>
+ *       <b>以</b>旁白句式开头才删，正文里出现相同词组不受影响。
+ *       宁可漏删，不可误删业务正文。</li>
  * </ol>
+ *
+ * <h3>接线状态：<b>两条链路都已接入</b></h3>
+ * 非流式在 {@code AssistantService#buildSuccessResult}、流式在
+ * {@code AssistantLifecycleService} 收口处，且都在<b>引用校验之前</b>调用——
+ * 旁白里的 {@code [n]} 编号不该被当成引用。
+ * 两条一起接是刻意的：只接一条会造成「非流式干净、流式带旁白」的分歧。
+ * <p>
+ * 另：流式<b>只对成功轮次净化</b>。取消/失败时文本是半截的，
+ * 此时删旁白可能把仅有的一点内容也删掉，故原样保留（status 字段已标明）。
  *
  * <h3>刻意不做的事</h3>
  * 不做「流式分片净化」。参考实现为此维护了跨分片的暂存会话与残缺标记处理，
  * 而本项目流式走 {@code SseEmitter}（非 {@code Flux}），要接进来得改动 SSE 管线。
- *
- * <h3>当前接线状态：<b>尚未接入调用链</b></h3>
- * 本类目前只提供净化能力与单测覆盖，<b>没有</b>挂到问答链路上。
- * 原因是非流式（{@code AssistantService#buildSuccessResult}）与流式（SSE 收口）取答案
- * 是两条路径，只接一条会造成「非流式干净、流式带旁白」的分歧——
- * 这类双链路行为不一致正是本项目此前踩过的坑，故<b>要么两条一起接，要么都不接</b>。
- * 待确定流式收口点后统一接入（见 {@code BusinessDataTurnGuard} 的同类说明）。
+ * 当前采用「回答完成后净化一次再落库」的等价处理。
  */
 @Component
 public class AssistantAnswerSanitizer {

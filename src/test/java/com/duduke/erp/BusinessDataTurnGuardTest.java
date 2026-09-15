@@ -1,5 +1,6 @@
 package com.duduke.erp;
 
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.duduke.erp.service.BusinessDataTurnGuard;
@@ -176,7 +177,7 @@ class BusinessDataTurnGuardTest {
     }
 
     private static ChatResponse response(String text) {
-        return new ChatResponse(java.util.List.of(new Generation(new AssistantMessage(text))));
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
     }
 
 }
