@@ -1,20 +1,29 @@
 package com.duduke.erp.service;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.UUID;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.duduke.erp.common.exception.BusinessException;
 import com.duduke.erp.entity.po.BillingAccount;
+import com.duduke.erp.entity.po.BillingPriceRule;
+import com.duduke.erp.entity.po.BillingTransaction;
 import com.duduke.erp.entity.po.TokenUsageDaily;
 import com.duduke.erp.entity.po.TokenUsageMonthly;
 import com.duduke.erp.entity.vo.BillingAccountVO;
 import com.duduke.erp.entity.vo.TokenUsageVO;
 import com.duduke.erp.mapper.BillingAccountMapper;
+import com.duduke.erp.mapper.BillingPriceRuleMapper;
+import com.duduke.erp.mapper.BillingTransactionMapper;
 import com.duduke.erp.mapper.TokenUsageDailyMapper;
 import com.duduke.erp.mapper.TokenUsageMonthlyMapper;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.stereotype.Service;
 
@@ -29,6 +38,7 @@ import org.springframework.stereotype.Service;
  * 单独做一半会留下「校验了但不扣」这类半成品语义。
  */
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class BillingService {
 
@@ -38,11 +48,24 @@ public class BillingService {
     /** 不传区间时的默认回溯天数 */
     private static final int DEFAULT_RANGE_DAYS = 30;
 
+    /** 账户可用状态 */
+    private static final String STATUS_ACTIVE = "active";
+
+    /** 交易类型：扣费 */
+    private static final String TYPE_DEDUCTION = "deduction";
+
     private final BillingAccountMapper accountMapper;
 
     private final TokenUsageDailyMapper dailyMapper;
 
     private final TokenUsageMonthlyMapper monthlyMapper;
+
+    private final BillingPriceRuleMapper priceRuleMapper;
+
+    private final BillingTransactionMapper transactionMapper;
+
+    /** 用量采集。扣费与采集总在同一时刻发生，故由本服务统一编排 */
+    private final TokenUsageRecorder tokenUsageRecorder;
 
     /**
      * 本租户计费账户。
@@ -51,8 +74,7 @@ public class BillingService {
      *         而不是展示一个全 0 的假账户）
      */
     public BillingAccountVO account() {
-        BillingAccount account = this.accountMapper.selectOne(
-                Wrappers.<BillingAccount>lambdaQuery().last("LIMIT 1"));
+        BillingAccount account = currentAccount();
         if (account == null) {
             return null;
         }
@@ -106,6 +128,126 @@ public class BillingService {
                 .map(row -> new TokenUsageVO(row.getPeriod(),
                         row.getModelName(), row.getTotalTokens(), row.getRequestCount()))
                 .toList();
+    }
+
+    // ===== 配额校验与扣费 =====
+
+    /**
+     * 调用模型前校验配额，超额<b>直接拒绝</b>：
+     * 用户会收到明确的业务错误，而不是一句照常生成的回答。
+     * <p>
+     * <b>未开户直接放行</b>：「没配计费」不等于「不能用」。若这里连
+     * {@code account == null} 也拦，一次配置疏漏就会让整个助手不可用，
+     * 故障面远大于收益。
+     * <p>
+     * <b>配额为 0 视为不限</b>：0 表示「没设配额」，与「配额已用尽」是两件事。
+     */
+    public void assertQuotaAvailable() {
+        BillingAccount account = currentAccount();
+        if (account == null) {
+            return;
+        }
+        if (!STATUS_ACTIVE.equals(account.getStatus())) {
+            throw new BusinessException("计费账户状态异常：" + account.getStatus() + "，请联系管理员");
+        }
+        long quota = value(account.getMonthlyQuota());
+        long used = value(account.getUsedTokens());
+        if (quota > 0 && used >= quota) {
+            throw new BusinessException(
+                    "本月 token 配额已用尽（" + used + "/" + quota + "），请联系管理员调整套餐");
+        }
+    }
+
+    /**
+     * 记录一轮问答的用量，并扣减配额与余额、写交易流水。
+     * <p>
+     * <b>旁路</b>：任一步失败只记 warn，绝不冒泡——回答已经产生，
+     * 不能因为「账没记上」把它变成失败。
+     */
+    public void recordConsumption(String modelName, Integer promptTokens,
+                                  Integer completionTokens, Integer totalTokens) {
+        this.tokenUsageRecorder.record(modelName, promptTokens, completionTokens, totalTokens);
+        try {
+            applyDeduction(modelName, value(promptTokens), value(completionTokens),
+                    value(totalTokens));
+        }
+        catch (RuntimeException e) {
+            log.warn("计费扣减失败（不影响问答）：{}", e.getMessage(), e);
+        }
+    }
+
+    private void applyDeduction(String modelName, long promptTokens, long completionTokens,
+                                long totalTokens) {
+        if (totalTokens <= 0) {
+            return;
+        }
+        BillingAccount account = currentAccount();
+        if (account == null) {
+            return;   // 未开户：用量已记下，无账户可扣
+        }
+        BigDecimal amount = computeAmount(modelName, promptTokens, completionTokens);
+        BigDecimal balanceAfter = value(account.getBalance()).subtract(amount);
+
+        account.setUsedTokens(value(account.getUsedTokens()) + totalTokens);
+        account.setBalance(balanceAfter);
+        this.accountMapper.updateById(account);
+
+        BillingTransaction transaction = new BillingTransaction();
+        transaction.setTransactionNo(UUID.randomUUID().toString().replace("-", ""));
+        transaction.setType(TYPE_DEDUCTION);
+        transaction.setAmount(amount.negate());
+        transaction.setBalanceAfter(balanceAfter);
+        transaction.setTokens(totalTokens);
+        transaction.setRemark("对话消耗");
+        this.transactionMapper.insert(transaction);
+    }
+
+    /**
+     * 按「不晚于今天」的最新价格规则计算金额。
+     * <p>
+     * 没有匹配的价格规则时<b>记 0 元</b>而不抛异常：缺价格配置是运营疏漏，
+     * 不该让用户的问答失败；用量已经记下，补齐价格规则后可另行追溯。
+     */
+    private BigDecimal computeAmount(String modelName, long promptTokens, long completionTokens) {
+        if (modelName == null) {
+            return BigDecimal.ZERO;
+        }
+        BillingPriceRule rule = this.priceRuleMapper.selectOne(Wrappers.<BillingPriceRule>lambdaQuery()
+                .eq(BillingPriceRule::getModelName, modelName)
+                .le(BillingPriceRule::getEffectiveDate, LocalDate.now())
+                .orderByDesc(BillingPriceRule::getEffectiveDate)
+                .last("LIMIT 1"));
+        if (rule == null) {
+            return BigDecimal.ZERO;
+        }
+        // 单价按「每千 token」定义，先乘数量再除 1000；
+        // 中间保留 6 位避免过早舍入，最终按金额精度留 2 位
+        BigDecimal perThousand = BigDecimal.valueOf(1000);
+        BigDecimal promptCost = value(rule.getInputPrice())
+                .multiply(BigDecimal.valueOf(promptTokens))
+                .divide(perThousand, 6, RoundingMode.HALF_UP);
+        BigDecimal completionCost = value(rule.getOutputPrice())
+                .multiply(BigDecimal.valueOf(completionTokens))
+                .divide(perThousand, 6, RoundingMode.HALF_UP);
+        return promptCost.add(completionCost).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /** 本租户账户（唯一索引保证最多一条） */
+    private BillingAccount currentAccount() {
+        return this.accountMapper.selectOne(
+                Wrappers.<BillingAccount>lambdaQuery().last("LIMIT 1"));
+    }
+
+    private static long value(Long number) {
+        return number == null ? 0L : number;
+    }
+
+    private static int value(Integer number) {
+        return number == null ? 0 : number;
+    }
+
+    private static BigDecimal value(BigDecimal number) {
+        return number == null ? BigDecimal.ZERO : number;
     }
 
 }

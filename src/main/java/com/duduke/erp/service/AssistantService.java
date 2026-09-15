@@ -128,7 +128,7 @@ public class AssistantService {
 
     private final ToolResultRecorder toolResultRecorder;
 
-    private final TokenUsageRecorder tokenUsageRecorder;
+    private final BillingService billingService;
 
     /**
      * 非流式问答。
@@ -136,6 +136,10 @@ public class AssistantService {
     public AskVO ask(AskDTO request) {
         String mode = normalizeMode(request.mode());
         String question = this.chatHistoryService.requireQuestion(request.question());
+
+        // 配额校验放在落库与建会话之前：拒绝时不留任何本轮痕迹
+        // （超额的问答应干净地失败，而不是留下一条没有回答的用户消息）
+        this.billingService.assertQuotaAvailable();
 
         ChatConversation conversation = this.chatHistoryService.resolveConversation(
                 request.conversationId(), question, resolveModelName());
@@ -366,6 +370,9 @@ public class AssistantService {
     public StreamPreparation prepareStream(AskDTO request) {
         String mode = normalizeMode(request.mode());
         String question = this.chatHistoryService.requireQuestion(request.question());
+        // 配额校验在启动 SSE 之前：本方法抛出的业务异常会以普通 JSON 响应返回，
+        // 不受「SSE 打开后无法改状态码」的限制（这正是 prepare 与 start 分离的原因之一）
+        this.billingService.assertQuotaAvailable();
         ChatConversation conversation = this.chatHistoryService.resolveConversation(
                 request.conversationId(), question, resolveModelName());
         this.chatHistoryService.ensureConversationWritable(conversation);
@@ -425,8 +432,8 @@ public class AssistantService {
                 ChatHistoryService.STATUS_COMPLETED, null,
                 recalled.size(), citationsJson);
 
-        // 用量采集：旁路，记录器内部已吞异常，不会影响本轮回合
-        this.tokenUsageRecorder.record(conversation.getModelId(),
+        // 用量采集 + 扣费：旁路，BillingService 内部已吞异常，不会影响本轮回合
+        this.billingService.recordConsumption(conversation.getModelId(),
                 promptTokens, completionTokens, totalTokens);
 
         // 图表必须在清理暂存之前编译：清理发生在 ask() 的 finally 里
