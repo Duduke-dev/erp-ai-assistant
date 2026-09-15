@@ -34,7 +34,7 @@ class StreamPreparationTest {
         // 用 record 的构造语义直接验证：知识库标识是准备结果的一部分，
         // 而非在启动流时另行决定。曾有版本把它漏掉，导致下游只能传 null。
         AssistantService.StreamPreparation preparation = new AssistantService.StreamPreparation(
-                new ChatConversation(), "问题", "knowledge", true, requested, "trace-1");
+                new ChatConversation(), "问题", "knowledge", requested, "trace-1");
 
         assertThat(preparation.knowledgeBaseId())
                 .as("请求指定了知识库，准备结果必须原样带出，否则会回落到默认库")
@@ -45,7 +45,7 @@ class StreamPreparationTest {
     @DisplayName("准备阶段必须把本轮 traceId 带出来（否则 Tool 流水无法归到本轮）")
     void preparationCarriesTraceId() {
         AssistantService.StreamPreparation preparation = new AssistantService.StreamPreparation(
-                new ChatConversation(), "问题", "auto", false, null, "trace-abc");
+                new ChatConversation(), "问题", "auto", null, "trace-abc");
 
         assertThat(preparation.traceId()).isEqualTo("trace-abc");
     }
@@ -54,22 +54,24 @@ class StreamPreparationTest {
     @DisplayName("未指定知识库时准备结果为空，交由下游回落默认库")
     void preparationKeepsNullWhenNotRequested() {
         AssistantService.StreamPreparation preparation = new AssistantService.StreamPreparation(
-                new ChatConversation(), "问题", "auto", false, null, "trace-2");
+                new ChatConversation(), "问题", "auto", null, "trace-2");
 
         assertThat(preparation.knowledgeBaseId()).isNull();
-        assertThat(preparation.knowledgeMode()).isFalse();
+        assertThat(preparation.mode()).isEqualTo("auto");
     }
 
     @Test
-    @DisplayName("knowledge 模式标记与模式字符串保持一致")
-    void preparationMarksKnowledgeMode() {
-        AssistantService.StreamPreparation knowledge = new AssistantService.StreamPreparation(
-                new ChatConversation(), "问题", "knowledge", true, null, "trace-3");
-        AssistantService.StreamPreparation auto = new AssistantService.StreamPreparation(
-                new ChatConversation(), "问题", "auto", false, null, "trace-4");
-
-        assertThat(knowledge.knowledgeMode()).isTrue();
-        assertThat(auto.knowledgeMode()).isFalse();
+    @DisplayName("模式原样带出，knowledge / data / auto 各不相混")
+    void preparationCarriesMode() {
+        assertThat(new AssistantService.StreamPreparation(
+                new ChatConversation(), "问题", "knowledge", null, "t1").mode())
+                .isEqualTo("knowledge");
+        assertThat(new AssistantService.StreamPreparation(
+                new ChatConversation(), "问题", "data", null, "t2").mode())
+                .isEqualTo("data");
+        assertThat(new AssistantService.StreamPreparation(
+                new ChatConversation(), "问题", "auto", null, "t3").mode())
+                .isEqualTo("auto");
     }
 
     /**

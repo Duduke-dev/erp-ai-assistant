@@ -1,5 +1,6 @@
 package com.duduke.erp.service;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -19,6 +20,12 @@ import com.duduke.erp.entity.vo.AskVO;
 import com.duduke.erp.entity.vo.ChatMessageVO;
 import com.duduke.erp.entity.vo.ConversationVO;
 import com.duduke.erp.entity.vo.RagCitation;
+import com.duduke.erp.service.chart.BusinessToolResult;
+import com.duduke.erp.service.chart.ChartCompiler;
+import com.duduke.erp.service.chart.ChartPlan;
+import com.duduke.erp.service.chart.ChartPlanToolCallback;
+import com.duduke.erp.service.chart.ChartSpec;
+import com.duduke.erp.service.chart.ToolResultRecorder;
 import com.duduke.erp.service.tool.ToolRegistryService;
 import com.duduke.erp.service.tool.trace.ToolCallRecorder;
 import com.duduke.erp.service.tool.trace.ToolTraceKeys;
@@ -37,6 +44,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 
 /**
@@ -79,6 +87,18 @@ public class AssistantService {
     /** 模式：纯知识库问答 */
     public static final String MODE_KNOWLEDGE = "knowledge";
 
+    /**
+     * 模式：纯业务数据问答。
+     * <p>
+     * 与 {@link #MODE_AUTO} 的区别在<b>约束强度</b>，不在工具集：
+     * auto 靠关键词启发式判断「这问题要不要查库」，data 则<b>始终要求</b>本轮取到业务数据
+     * （见 {@code BusinessDataTurnGuard#requiresCurrentBusinessData}），
+     * 拿不到就换强约束提示词重试——用户明确选了「查数据」，就不该收到一段凭印象的回答。
+     * <p>
+     * 两者都<b>不挂 RAG</b>：RAG 只在 knowledge 模式挂。
+     */
+    public static final String MODE_DATA = "data";
+
     private final AssistantClientProvider assistantClientProvider;
 
     private final ChatMemoryAdvisorFactory chatMemoryAdvisorFactory;
@@ -101,13 +121,19 @@ public class AssistantService {
 
     private final AssistantAnswerSanitizer answerSanitizer;
 
+    /** 图表方案 Tool（系统内部工具，不查业务数据） */
+    private final ChartPlanToolCallback chartPlanToolCallback;
+
+    private final ChartCompiler chartCompiler;
+
+    private final ToolResultRecorder toolResultRecorder;
+
     /**
      * 非流式问答。
      */
     public AskVO ask(AskDTO request) {
         String mode = normalizeMode(request.mode());
         String question = this.chatHistoryService.requireQuestion(request.question());
-        boolean knowledgeMode = MODE_KNOWLEDGE.equals(mode);
 
         ChatConversation conversation = this.chatHistoryService.resolveConversation(
                 request.conversationId(), question, resolveModelName());
@@ -120,7 +146,7 @@ public class AssistantService {
         long startedAt = System.currentTimeMillis();
         try {
             ChatResponse firstResponse = invokeModel(conversation, question,
-                    knowledgeMode, request.knowledgeBaseId(), traceId);
+                    mode, request.knowledgeBaseId(), traceId);
             // 守卫：本轮本该查库却没拿到业务数据时，换成「禁止复用历史数字」的提示词重试一次。
             // 重试沿用同一 traceId，这样重试产生的 Tool 调用会累加进同一条链路记录，
             // 守卫才能据此判断重试后是否真的拿到了数据。
@@ -128,9 +154,10 @@ public class AssistantService {
                     firstResponse,
                     () -> invokeModel(conversation,
                             this.businessDataTurnGuard.retryQuestion(question),
-                            knowledgeMode, request.knowledgeBaseId(), traceId),
+                            mode, request.knowledgeBaseId(), traceId),
                     mode, question, traceId);
-            return buildSuccessResult(conversation, mode, response, System.currentTimeMillis() - startedAt);
+            return buildSuccessResult(conversation, mode, response,
+                    System.currentTimeMillis() - startedAt, traceId);
         }
         catch (RuntimeException e) {
             long elapsed = System.currentTimeMillis() - startedAt;
@@ -144,6 +171,9 @@ public class AssistantService {
             // 线程复用，必须清理，否则下一次请求会读到本轮证据导致引用串档
             RagContextFormatter.clearRecalledDocuments();
             this.toolCallRecorder.clearTrace(traceId);
+            // 图表暂存同样是请求作用域的：不清理会让下一轮读到本轮的数据（串档）
+            this.chartPlanToolCallback.clear(traceId);
+            this.toolResultRecorder.clear(traceId);
         }
     }
 
@@ -155,8 +185,8 @@ public class AssistantService {
      * 反过来则检索只能看到当前这一句，多轮追问（「那上个月呢」）会检索不到任何东西。
      */
     private ChatResponse invokeModel(ChatConversation conversation, String question,
-                                     boolean knowledgeMode, Long knowledgeBaseId, String traceId) {
-        return streamingCall(conversation, question, knowledgeMode, knowledgeBaseId, traceId)
+                                     String mode, Long knowledgeBaseId, String traceId) {
+        return streamingCall(conversation, question, mode, knowledgeBaseId, traceId, true)
                 .call()
                 .chatResponse();
     }
@@ -178,12 +208,12 @@ public class AssistantService {
      * 由注册的 {@code TenantContextAccessor} 在每次线程切换时自动恢复。
      */
     public Flux<ChatResponse> streamModel(ChatConversation conversation, String question,
-                                          boolean knowledgeMode, Long knowledgeBaseId,
+                                          String mode, Long knowledgeBaseId,
                                           String traceId) {
         String entCode = TenantContext.getEntCode();
         Long userId = TenantContext.getUserId();
 
-        return streamingCall(conversation, question, knowledgeMode, knowledgeBaseId, traceId)
+        return streamingCall(conversation, question, mode, knowledgeBaseId, traceId, true)
                 .stream()
                 .chatResponse()
                 .contextWrite(context -> context.put(
@@ -192,6 +222,10 @@ public class AssistantService {
                 // 用完即清，且必须覆盖完成 / 异常 / 取消三条路径——
                 // doFinally 对三者都会触发。漏掉取消的话，用户点「停止」后
                 // 这条 trace 会一直留在聚合器里，下一轮可能读到它。
+                // 图表暂存**不在这里清**：它由收口处「读完即清」
+                // （见 AssistantLifecycleService#clearChartState）。
+                // 放在这里清会引入 doFinally 与收口的先后依赖——顺序一旦相反，
+                // 收口就读不到数据，图表恒为 null 且不报错。
                 .doFinally(signal -> this.toolCallRecorder.clearTrace(traceId));
     }
 
@@ -208,7 +242,9 @@ public class AssistantService {
      */
     private ChatClient.ChatClientRequestSpec streamingCall(
             ChatConversation conversation, String question,
-            boolean knowledgeMode, Long knowledgeBaseId, String traceId) {
+            String mode, Long knowledgeBaseId, String traceId,
+            boolean withChartTool) {
+        boolean knowledgeMode = MODE_KNOWLEDGE.equals(mode);
         MessageChatMemoryAdvisor memoryAdvisor = this.chatMemoryAdvisorFactory.create();
 
         ChatClient.ChatClientRequestSpec spec = this.assistantClientProvider.client()
@@ -221,8 +257,11 @@ public class AssistantService {
                     advisor.advisors(memoryAdvisor)
                             .param(ChatMemory.CONVERSATION_ID, conversation.getConversationId());
                     if (knowledgeMode) {
-                        // knowledge 模式必须挂 RAG，检索不到就如实说明资料不足
-                        advisor.advisors(this.ragAnswerService.prepareAdvisor(knowledgeBaseId, true));
+                        // knowledge 模式必须挂 RAG，检索不到就如实说明资料不足。
+                        // 一并带出历史提问：检索前改写要靠它补全省略式追问（「那上个月呢」）。
+                        advisor.advisors(this.ragAnswerService.prepareAdvisor(
+                                knowledgeBaseId, true,
+                                previousUserQuestions(conversation, question)));
                     }
                 });
 
@@ -230,18 +269,26 @@ public class AssistantService {
             return spec;
         }
 
-        List<ToolCallback> tools = this.toolRegistry.snapshot().visibleTo(currentPermissions());
+        List<ToolCallback> visible = this.toolRegistry.snapshot().visibleTo(currentPermissions());
         // 空列表也要显式跳过：传一个空 tools 数组给模型是毫无意义的噪声
-        if (tools.isEmpty()) {
+        if (visible.isEmpty()) {
             log.warn("本轮无任何可用 Tool：conversationId={}，请检查用户权限配置",
                     conversation.getConversationId());
             return spec;
+        }
+        // 图表 Tool 是系统内部工具：不查业务数据，没有「数据权限」可言，
+        // 因此不进按权限过滤的快照，而是在这里追加——谁能在 auto 模式用 Tool 就能用它。
+        // 流式暂不挂：图表事件的收口尚未接线（见 M4.2 待办），
+        // 挂了会导致「模型声明了图表却什么都没出现」的误导。
+        List<ToolCallback> tools = new ArrayList<>(visible);
+        if (withChartTool) {
+            tools.add(this.chartPlanToolCallback);
         }
         // tools(Object...) 是 Spring AI 2.0 的非弃用入口（toolCallbacks(List) 自 2.0.0 起弃用待移除）。
         // 传 ToolCallback[] 与旧写法等价：DefaultChatClient 会把数组元素并入同一个 toolCallbacks 列表，
         // 因此下游 options.getToolCallbacks() 仍能取到这批 Tool。
         return spec.tools(tools.toArray(new ToolCallback[0]))
-                .toolContext(toolTraceContext(conversation, traceId));
+                .toolContext(toolTraceContext(conversation, traceId, mode));
     }
 
     /**
@@ -255,17 +302,41 @@ public class AssistantService {
     }
 
     /**
+     * 取会话内的历史提问（<b>不含本轮</b>），供检索前改写补全省略式追问。
+     * <p>
+     * <b>必须剔除本轮提问</b>：用户消息在调用模型之前就已落库，
+     * 不剔除的话锚点会等于问题本身，被改写成「自己 + 自己」——
+     * 检索照样跑、照样返回结果，只是结果与用户意图无关，且不报错。
+     */
+    private List<String> previousUserQuestions(ChatConversation conversation, String question) {
+        List<String> questions = new ArrayList<>();
+        for (ChatMessage message : this.chatHistoryService.listMessages(
+                conversation.getConversationId())) {
+            if ("user".equals(message.getRole()) && StringUtils.hasText(message.getContent())) {
+                questions.add(message.getContent());
+            }
+        }
+        if (!questions.isEmpty() && questions.get(questions.size() - 1).equals(question)) {
+            questions.remove(questions.size() - 1);
+        }
+        return questions;
+    }
+
+    /**
      * 构造传给 Tool 的链路上下文。
      * <p>
      * 用 HashMap 而非 {@code Map.of}：后者遇到 null 值直接抛 NPE，
      * 而租户、用户这些字段在异常路径上确实可能为 null——
      * 缺一个字段只是流水里少一列的排查信息，不该让整轮问答失败。
      */
-    private Map<String, Object> toolTraceContext(ChatConversation conversation, String traceId) {
+    private Map<String, Object> toolTraceContext(ChatConversation conversation, String traceId,
+                                                 String mode) {
         Map<String, Object> context = new HashMap<>();
         context.put(ToolTraceKeys.TRACE_ID, traceId);
         context.put(ToolTraceKeys.CONVERSATION_ID, conversation.getConversationId());
-        context.put(ToolTraceKeys.MODE, MODE_AUTO);
+        // 必须记真实模式：早先这里硬编码 auto，会让 data 模式的调用流水也记成 auto，
+        // 排查「这个 Tool 是在哪种模式下被调的」时直接拿到错误答案
+        context.put(ToolTraceKeys.MODE, mode);
         context.put(ToolTraceKeys.MODEL, conversation.getModelId());
         putIfPresent(context, ToolTraceKeys.ENT_CODE, TenantContext.getEntCode());
         putIfPresent(context, ToolTraceKeys.USER_ID, TenantContext.getUserId());
@@ -298,8 +369,7 @@ public class AssistantService {
         this.chatHistoryService.ensureConversationWritable(conversation);
         this.chatHistoryService.saveUserMessage(conversation, question, mode);
         return new StreamPreparation(conversation, question, mode,
-                MODE_KNOWLEDGE.equals(mode), request.knowledgeBaseId(),
-                ToolCallRecorder.createTraceId());
+                request.knowledgeBaseId(), ToolCallRecorder.createTraceId());
     }
 
     /**
@@ -307,8 +377,9 @@ public class AssistantService {
      *
      * @param conversation    已校验归属的会话
      * @param question        规范化后的提问
-     * @param mode            规范化后的模式
-     * @param knowledgeMode   是否知识问答模式
+     * @param mode            规范化后的模式（auto / data / knowledge）。
+     *                        <b>不再单独带 knowledgeMode 布尔</b>：它能由 mode 推导，
+     *                        两个字段并存就是「两份真相」，迟早出现二者不一致
      * @param knowledgeBaseId 请求指定的知识库，为空时由下游回落到默认库
      * @param traceId         本轮链路 ID。<b>必须随准备结果带出</b>——
      *                        它和 knowledgeBaseId 一样属于请求级参数，
@@ -319,7 +390,6 @@ public class AssistantService {
             ChatConversation conversation,
             String question,
             String mode,
-            boolean knowledgeMode,
             Long knowledgeBaseId,
             String traceId) {
     }
@@ -328,7 +398,7 @@ public class AssistantService {
      * 从响应中提取答案、用量、召回文档，校验引用后落库并组装返回。
      */
     private AskVO buildSuccessResult(ChatConversation conversation, String mode,
-                                     ChatResponse response, long elapsedMs) {
+                                     ChatResponse response, long elapsedMs, String traceId) {
         // 净化必须在引用校验之前：内部旁白里的 [n] 编号不该被当成引用
         String rawAnswer = response == null || response.getResult() == null
                 ? null
@@ -353,6 +423,9 @@ public class AssistantService {
                 ChatHistoryService.STATUS_COMPLETED, null,
                 recalled.size(), citationsJson);
 
+        // 图表必须在清理暂存之前编译：清理发生在 ask() 的 finally 里
+        ChartSpec chart = compileChart(conversation, traceId);
+
         return new AskVO(
                 conversation.getConversationId(),
                 saved.getId(),
@@ -360,10 +433,31 @@ public class AssistantService {
                 mode,
                 citations,
                 recalled.size(),
+                chart,
                 promptTokens,
                 completionTokens,
                 totalTokens,
                 elapsedMs);
+    }
+
+    /**
+     * 编译本轮图表。
+     * <p>
+     * 模型登记的只是「类型 + 标题」，真正的数据来自 {@code ToolResultRecorder}
+     * 暂存的本轮 Tool 结果——两者在这里汇合。
+     * 模型没登记方案、或数据无法成图时返回 {@code null}（不画无意义的图）。
+     * <p>
+     * <b>必须在清理暂存之前调用</b>：清理发生在 {@code ask()} 的 finally 里，
+     * 顺序反了就永远拿不到数据，且不会报错。
+     */
+    private ChartSpec compileChart(ChatConversation conversation, String traceId) {
+        ChartPlan plan = this.chartPlanToolCallback.planOf(traceId);
+        if (plan == null) {
+            return null;
+        }
+        List<BusinessToolResult> results = this.toolResultRecorder.getResults(
+                traceId, conversation.getEntCode(), conversation.getConversationId());
+        return this.chartCompiler.compile(plan, results);
     }
 
     /**
@@ -436,6 +530,9 @@ public class AssistantService {
     private String normalizeMode(String mode) {
         if (MODE_KNOWLEDGE.equalsIgnoreCase(mode)) {
             return MODE_KNOWLEDGE;
+        }
+        if (MODE_DATA.equalsIgnoreCase(mode)) {
+            return MODE_DATA;
         }
         return MODE_AUTO;
     }

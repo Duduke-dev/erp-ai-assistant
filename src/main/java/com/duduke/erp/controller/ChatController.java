@@ -130,7 +130,7 @@ public class ChatController {
      */
     private void startStreaming(SseEmitter emitter, AssistantService.StreamPreparation preparation) {
         var conversation = preparation.conversation();
-        var state = this.assistantLifecycleService.newState();
+        var state = this.assistantLifecycleService.newState(preparation.traceId());
         var finalized = new AtomicBoolean(false);
         long startedAt = System.currentTimeMillis();
 
@@ -155,9 +155,8 @@ public class ChatController {
         });
 
         Disposable subscription = this.assistantService.streamModel(
-                        conversation, preparation.question(),
-                        preparation.knowledgeMode(), preparation.knowledgeBaseId(),
-                        preparation.traceId())
+                        conversation, preparation.question(), preparation.mode(),
+                        preparation.knowledgeBaseId(), preparation.traceId())
                 .subscribe(
                         response -> handleDelta(emitter, state, response),
                         error -> finishWithError(emitter, state, preparation, startedAt, finalized, error),
@@ -198,6 +197,11 @@ public class ChatController {
                 emitter.send(SseEmitter.event()
                         .name(StreamEventType.CITATIONS.eventName())
                         .data(outcome.citations()));
+            }
+            if (outcome.chart() != null) {
+                emitter.send(SseEmitter.event()
+                        .name(StreamEventType.CHART.eventName())
+                        .data(outcome.chart()));
             }
             if (outcome.done() != null) {
                 emitter.send(SseEmitter.event()
