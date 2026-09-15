@@ -85,6 +85,8 @@ public class AssistantLifecycleService {
 
     private final ToolResultRecorder toolResultRecorder;
 
+    private final TokenUsageRecorder tokenUsageRecorder;
+
     /**
      * 一轮流式回答期间可观测到的运行时数据。
      * <p>
@@ -374,6 +376,11 @@ public class AssistantLifecycleService {
                     conversation, answer, mode,
                     promptTokens, completionTokens, promptTokens + completionTokens, elapsedMs,
                     status, errorMessage, ragDocCount, citationsJson);
+
+            // 用量采集：旁路，记录器内部已吞异常。
+            // 取消的轮次同样记录——已产生的 token 是真实消耗（totalTokens 为 0 时记录器自动跳过）
+            this.tokenUsageRecorder.record(conversation.getModelId(),
+                    promptTokens, completionTokens, promptTokens + completionTokens);
 
             StreamDone done = new StreamDone(
                     conversation.getConversationId(), saved.getId(), status, elapsedMs,

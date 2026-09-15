@@ -128,6 +128,8 @@ public class AssistantService {
 
     private final ToolResultRecorder toolResultRecorder;
 
+    private final TokenUsageRecorder tokenUsageRecorder;
+
     /**
      * 非流式问答。
      */
@@ -422,6 +424,10 @@ public class AssistantService {
                 promptTokens, completionTokens, totalTokens, elapsedMs,
                 ChatHistoryService.STATUS_COMPLETED, null,
                 recalled.size(), citationsJson);
+
+        // 用量采集：旁路，记录器内部已吞异常，不会影响本轮回合
+        this.tokenUsageRecorder.record(conversation.getModelId(),
+                promptTokens, completionTokens, totalTokens);
 
         // 图表必须在清理暂存之前编译：清理发生在 ask() 的 finally 里
         ChartSpec chart = compileChart(conversation, traceId);

@@ -171,7 +171,8 @@ class AssistantLifecycleServiceTest {
                 new com.duduke.erp.service.chart.ChartPlanToolCallback(
                         new tools.jackson.databind.ObjectMapper()),
                 new com.duduke.erp.service.chart.ChartCompiler(),
-                new com.duduke.erp.service.chart.ToolResultRecorder());
+                new com.duduke.erp.service.chart.ToolResultRecorder(),
+                new com.duduke.erp.service.TokenUsageRecorder(null, null));
     }
 
     /** 会话对象仅用于读取标识，本测试不触发落库 */
