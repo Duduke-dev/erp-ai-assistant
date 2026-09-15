@@ -2,19 +2,31 @@ package com.duduke.erp.service;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.util.List;
+import java.util.UUID;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.duduke.erp.common.exception.BusinessException;
+import com.duduke.erp.entity.dto.BillingAccountSaveDTO;
 import com.duduke.erp.entity.dto.BillingPlanSaveDTO;
 import com.duduke.erp.entity.dto.BillingPriceRuleSaveDTO;
+import com.duduke.erp.entity.dto.BillingRechargeDTO;
+import com.duduke.erp.entity.po.BillingAccount;
+import com.duduke.erp.entity.po.BillingInvoice;
 import com.duduke.erp.entity.po.BillingPlan;
 import com.duduke.erp.entity.po.BillingPriceRule;
+import com.duduke.erp.entity.po.BillingTransaction;
+import com.duduke.erp.entity.vo.BillingInvoiceVO;
 import com.duduke.erp.entity.vo.BillingPlanVO;
 import com.duduke.erp.entity.vo.BillingPriceRuleVO;
+import com.duduke.erp.entity.vo.BillingTransactionVO;
 import com.duduke.erp.mapper.BillingAccountMapper;
+import com.duduke.erp.mapper.BillingInvoiceMapper;
 import com.duduke.erp.mapper.BillingPlanMapper;
 import com.duduke.erp.mapper.BillingPriceRuleMapper;
+import com.duduke.erp.mapper.BillingTransactionMapper;
 
 import lombok.RequiredArgsConstructor;
 
@@ -45,6 +57,10 @@ public class BillingManagementService {
     private final BillingPriceRuleMapper priceRuleMapper;
 
     private final BillingAccountMapper accountMapper;
+
+    private final BillingTransactionMapper transactionMapper;
+
+    private final BillingInvoiceMapper invoiceMapper;
 
     // ===== 套餐 =====
 
@@ -162,6 +178,148 @@ public class BillingManagementService {
         this.priceRuleMapper.deleteById(id);
     }
 
+    // ===== 账户 =====
+
+    private static final String TYPE_RECHARGE = "recharge";
+
+    private static final String TYPE_DEDUCTION = "deduction";
+
+    private static final String STATUS_ACTIVE = "active";
+
+    private static final java.util.Set<String> ALLOWED_STATUS =
+            java.util.Set.of("active", "suspended", "arrears");
+
+    /**
+     * 开户。每租户只允许一条账户。
+     * <p>
+     * <b>不指定额度时从套餐快照</b>：账户持有的是签约时的额度，
+     * 套餐后来调额不该追溯改变已开户账户的当前周期额度。
+     */
+    public Long createAccount(BillingAccountSaveDTO dto) {
+        if (currentAccount() != null) {
+            throw new BusinessException("本租户已开户，请使用更新接口");
+        }
+        String planCode = requireText(dto.planCode(), "套餐编码不能为空");
+        BillingPlan plan = requirePlanByCode(planCode);
+
+        BillingAccount account = new BillingAccount();
+        account.setPlanCode(planCode);
+        account.setMonthlyQuota(dto.monthlyQuota() == null
+                ? (plan.getMonthlyQuota() == null ? 0L : plan.getMonthlyQuota())
+                : requireNonNegative(dto.monthlyQuota(), "月度配额不能为负"));
+        account.setBalance(BigDecimal.ZERO);
+        account.setUsedTokens(0L);
+        account.setStatus(normalizeStatus(dto.status()));
+        this.accountMapper.insert(account);
+        return account.getId();
+    }
+
+    /**
+     * 更新账户（套餐 / 配额 / 状态）。
+     * <p>
+     * <b>不动 {@code usedTokens}</b>：已用量只能由真实消耗累加，
+     * 允许管理端改写会让用量统计变成可由人工覆盖的数字，失去对账意义。
+     */
+    public void updateAccount(Long id, BillingAccountSaveDTO dto) {
+        BillingAccount account = requireAccount(id);
+        String planCode = requireText(dto.planCode(), "套餐编码不能为空");
+        BillingPlan plan = requirePlanByCode(planCode);
+
+        account.setPlanCode(planCode);
+        account.setMonthlyQuota(dto.monthlyQuota() == null
+                ? (plan.getMonthlyQuota() == null ? 0L : plan.getMonthlyQuota())
+                : requireNonNegative(dto.monthlyQuota(), "月度配额不能为负"));
+        account.setStatus(normalizeStatus(dto.status()));
+        this.accountMapper.updateById(account);
+    }
+
+    /**
+     * 充值：加余额并记一条 recharge 流水。
+     * <p>
+     * <b>金额必须为正</b>：扣钱走系统内部的 deduction，不让一个接口同时承担
+     * 加钱与扣钱两种语义——那正是财务接口最容易被误用的地方。
+     */
+    public void recharge(Long id, BillingRechargeDTO dto) {
+        BillingAccount account = requireAccount(id);
+        BigDecimal amount = dto.amount();
+        if (amount == null || amount.signum() <= 0) {
+            throw new BusinessException("充值金额必须大于 0");
+        }
+        BigDecimal balanceAfter = value(account.getBalance()).add(amount);
+        account.setBalance(balanceAfter);
+        this.accountMapper.updateById(account);
+
+        insertTransaction(TYPE_RECHARGE, amount, balanceAfter, 0L,
+                StringUtils.hasText(dto.remark()) ? dto.remark().trim() : "账户充值");
+    }
+
+    // ===== 交易流水 =====
+
+    /** 本租户交易流水，最新在前 */
+    public List<BillingTransactionVO> listTransactions() {
+        return this.transactionMapper.selectList(Wrappers.<BillingTransaction>lambdaQuery()
+                        .orderByDesc(BillingTransaction::getId)).stream()
+                .map(this::toTransactionVO).toList();
+    }
+
+    // ===== 发票 =====
+
+    /**
+     * 按账期开票。
+     * <p>
+     * 金额与 token 数取自该账期的 <b>deduction 流水汇总</b>，而不是重新按价格表计算——
+     * 价格规则可以中途调整，按当时流水汇总才能与用户实际被扣的金额一致。
+     * <p>
+     * 同一账期重复开票直接拒绝：两张发票对账时无法判断以哪张为准。
+     */
+    public BillingInvoiceVO generateInvoice(String period) {
+        if (!StringUtils.hasText(period)) {
+            throw new BusinessException("账期不能为空");
+        }
+        YearMonth month;
+        try {
+            month = YearMonth.parse(period.trim());
+        }
+        catch (RuntimeException e) {
+            throw new BusinessException("账期格式应为 yyyy-MM：" + period);
+        }
+        BillingInvoice existing = this.invoiceMapper.selectOne(Wrappers.<BillingInvoice>lambdaQuery()
+                .eq(BillingInvoice::getPeriod, month.toString()).last("LIMIT 1"));
+        if (existing != null) {
+            throw new BusinessException("该账期已开票：" + month);
+        }
+
+        LocalDateTime from = month.atDay(1).atStartOfDay();
+        LocalDateTime to = month.plusMonths(1).atDay(1).atStartOfDay();
+        List<BillingTransaction> deductions = this.transactionMapper.selectList(
+                Wrappers.<BillingTransaction>lambdaQuery()
+                        .eq(BillingTransaction::getType, TYPE_DEDUCTION)
+                        .ge(BillingTransaction::getCreatedAt, from)
+                        .lt(BillingTransaction::getCreatedAt, to));
+
+        long totalTokens = 0L;
+        BigDecimal totalAmount = BigDecimal.ZERO;
+        for (BillingTransaction tx : deductions) {
+            totalTokens += tx.getTokens() == null ? 0L : tx.getTokens();
+            // 扣费流水的 amount 是负数，开票金额取绝对值
+            totalAmount = totalAmount.add(value(tx.getAmount()).abs());
+        }
+
+        BillingInvoice invoice = new BillingInvoice();
+        invoice.setPeriod(month.toString());
+        invoice.setTotalTokens(totalTokens);
+        invoice.setTotalAmount(totalAmount);
+        this.invoiceMapper.insert(invoice);
+        return toInvoiceVO(invoice);
+    }
+
+    /** 本租户发票，最新账期在前 */
+    public List<BillingInvoiceVO> listInvoices() {
+        return this.invoiceMapper.selectList(Wrappers.<BillingInvoice>lambdaQuery()
+                        .orderByDesc(BillingInvoice::getPeriod)).stream()
+                .map(this::toInvoiceVO).toList();
+    }
+
     // ===== 校验与转换 =====
 
     private BillingPlan requirePlan(Long id) {
@@ -210,6 +368,70 @@ public class BillingManagementService {
                 .le(BillingPriceRule::getEffectiveDate, date)
                 .orderByDesc(BillingPriceRule::getEffectiveDate)
                 .last("LIMIT 1"));
+    }
+
+    /** 本租户账户（唯一索引保证最多一条） */
+    private BillingAccount currentAccount() {
+        return this.accountMapper.selectOne(
+                Wrappers.<BillingAccount>lambdaQuery().last("LIMIT 1"));
+    }
+
+    private BillingAccount requireAccount(Long id) {
+        BillingAccount account = this.accountMapper.selectById(id);
+        if (account == null) {
+            throw new BusinessException("计费账户不存在：" + id);
+        }
+        return account;
+    }
+
+    private BillingPlan requirePlanByCode(String planCode) {
+        BillingPlan plan = this.planMapper.selectOne(Wrappers.<BillingPlan>lambdaQuery()
+                .eq(BillingPlan::getPlanCode, planCode).last("LIMIT 1"));
+        if (plan == null) {
+            // 与「被引用的套餐不可删」互补：写侧也保证账户不会指向不存在的套餐
+            throw new BusinessException("套餐不存在：" + planCode);
+        }
+        return plan;
+    }
+
+    /** 状态为空按 active；非法值当场报错，避免拼错的状态悄悄落库 */
+    private String normalizeStatus(String status) {
+        if (!StringUtils.hasText(status)) {
+            return STATUS_ACTIVE;
+        }
+        String normalized = status.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!ALLOWED_STATUS.contains(normalized)) {
+            throw new BusinessException("状态只能是 active / suspended / arrears，实际为：" + status);
+        }
+        return normalized;
+    }
+
+    private void insertTransaction(String type, BigDecimal amount, BigDecimal balanceAfter,
+                                   Long tokens, String remark) {
+        BillingTransaction transaction = new BillingTransaction();
+        // 单号用 UUID：它有 32 位十六进制，撞号概率可忽略，且不需要额外查库生成序号
+        transaction.setTransactionNo(UUID.randomUUID().toString().replace("-", ""));
+        transaction.setType(type);
+        transaction.setAmount(amount);
+        transaction.setBalanceAfter(balanceAfter);
+        transaction.setTokens(tokens);
+        transaction.setRemark(remark);
+        this.transactionMapper.insert(transaction);
+    }
+
+    private BillingTransactionVO toTransactionVO(BillingTransaction transaction) {
+        return new BillingTransactionVO(transaction.getId(), transaction.getTransactionNo(),
+                transaction.getType(), transaction.getAmount(), transaction.getBalanceAfter(),
+                transaction.getTokens(), transaction.getRemark(), transaction.getCreatedAt());
+    }
+
+    private BillingInvoiceVO toInvoiceVO(BillingInvoice invoice) {
+        return new BillingInvoiceVO(invoice.getId(), invoice.getPeriod(),
+                invoice.getTotalTokens(), invoice.getTotalAmount(), invoice.getCreatedAt());
+    }
+
+    private static BigDecimal value(BigDecimal number) {
+        return number == null ? BigDecimal.ZERO : number;
     }
 
 }

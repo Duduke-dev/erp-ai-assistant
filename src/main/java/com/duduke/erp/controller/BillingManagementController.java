@@ -2,10 +2,14 @@ package com.duduke.erp.controller;
 
 import java.util.List;
 
+import com.duduke.erp.entity.dto.BillingAccountSaveDTO;
 import com.duduke.erp.entity.dto.BillingPlanSaveDTO;
 import com.duduke.erp.entity.dto.BillingPriceRuleSaveDTO;
+import com.duduke.erp.entity.dto.BillingRechargeDTO;
+import com.duduke.erp.entity.vo.BillingInvoiceVO;
 import com.duduke.erp.entity.vo.BillingPlanVO;
 import com.duduke.erp.entity.vo.BillingPriceRuleVO;
+import com.duduke.erp.entity.vo.BillingTransactionVO;
 import com.duduke.erp.service.BillingManagementService;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
@@ -92,6 +96,55 @@ public class BillingManagementController {
     @DeleteMapping("/price_rules/{id}")
     public void removePriceRule(@PathVariable Long id) {
         this.billingManagementService.removePriceRule(id);
+    }
+
+    // ===== 账户 =====
+    //
+    // 读接口（`billing:query`）也放在本控制器：它们查的流水与发票由同一个服务承载，
+    // 拆到另一个控制器只会让同一条路径在两处注册，反而难追踪。
+
+    @SaCheckPermission("billing:manage")
+    @PostMapping("/accounts")
+    public Long createAccount(@RequestBody BillingAccountSaveDTO dto) {
+        return this.billingManagementService.createAccount(dto);
+    }
+
+    @SaCheckPermission("billing:manage")
+    @PutMapping("/accounts/{id}")
+    public void updateAccount(@PathVariable Long id, @RequestBody BillingAccountSaveDTO dto) {
+        this.billingManagementService.updateAccount(id, dto);
+    }
+
+    /** 充值；金额必须为正，扣费不走这个接口 */
+    @SaCheckPermission("billing:manage")
+    @PostMapping("/accounts/{id}/recharges")
+    public void recharge(@PathVariable Long id, @RequestBody BillingRechargeDTO dto) {
+        this.billingManagementService.recharge(id, dto);
+    }
+
+    // ===== 交易流水与发票 =====
+
+    @SaCheckPermission("billing:query")
+    @GetMapping("/transactions")
+    public List<BillingTransactionVO> listTransactions() {
+        return this.billingManagementService.listTransactions();
+    }
+
+    @SaCheckPermission("billing:query")
+    @GetMapping("/invoices")
+    public List<BillingInvoiceVO> listInvoices() {
+        return this.billingManagementService.listInvoices();
+    }
+
+    /**
+     * 按账期开票。
+     *
+     * @param period 账期 {@code yyyy-MM}
+     */
+    @SaCheckPermission("billing:manage")
+    @PostMapping("/invoices")
+    public BillingInvoiceVO generateInvoice(@RequestParam String period) {
+        return this.billingManagementService.generateInvoice(period);
     }
 
 }
