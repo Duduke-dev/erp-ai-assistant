@@ -36,6 +36,13 @@ public class KnowledgeDocument {
     /** processing / ready / failed / superseded / deleted */
     private String status;
 
+    /**
+     * 解析阶段（{@code status = processing} 时的细分）：queued / parsing / embedding。
+     * <p>
+     * 历史行留 NULL：它们没有经历过阶段流转，编一个阶段出来就是假数据。
+     */
+    private String stage;
+
     /** 对象存储定位，M2.5 接入 RustFS 后启用 */
     private String bucket;
 

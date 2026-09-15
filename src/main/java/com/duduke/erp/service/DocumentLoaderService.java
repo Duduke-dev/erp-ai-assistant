@@ -50,12 +50,32 @@ public class DocumentLoaderService {
      */
     public ManagedDocumentLoadResult loadAndStore(InputStream inputStream,
                                                   ManagedDocumentMetadata metadata) {
+        return loadAndStore(inputStream, metadata, () -> { });
+    }
+
+    /**
+     * 解析文档流并写入向量库，在「分块完成、开始写向量」之前回调一次。
+     *
+     * <h3>幂等：写入前先清同版本</h3>
+     * 重投、重试、人工重投都会把这一段再走一遍。向量 id 是随机 UUID，
+     * 不先清的话同版本会叠加出两份向量：检索时同一段内容出现两次，
+     * <b>不报错</b>，只是悄悄拉低结果质量——正是本项目最怕的那类静默失效。
+     * 清理按四元组精确匹配，对不存在的版本是空操作，代价可忽略。
+     *
+     * @param beforeEmbedding 切分完成、写向量之前触发（用于把阶段推进到 embedding）
+     * @return 分片数与原文校验和
+     */
+    public ManagedDocumentLoadResult loadAndStore(InputStream inputStream,
+                                                  ManagedDocumentMetadata metadata,
+                                                  Runnable beforeEmbedding) {
+        deleteVersion(metadata);
         MessageDigest digest = newSha256();
         try (DigestInputStream digestStream = new DigestInputStream(inputStream, digest)) {
             List<Document> chunks = readAndSplit(digestStream, metadata.sourceName());
             if (chunks.isEmpty()) {
                 throw new IllegalArgumentException("文档解析后没有可用内容：" + metadata.sourceName());
             }
+            beforeEmbedding.run();
             addWithMetadata(chunks, metadata);
             return new ManagedDocumentLoadResult(chunks.size(), HexFormat.of().formatHex(digest.digest()));
         } catch (IOException e) {

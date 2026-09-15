@@ -100,6 +100,11 @@ public class KnowledgeDocumentIngestionService {
             // 先存原件再投递：消息里带着对象键，消费侧取不到原件就是"上传成功但永远解析不了"
             String objectKey = this.objectStorageService.put(
                     this.objectStorageService.buildKey(entCode, fileName), content, contentType);
+            // 键要回写进库：只在消息里的话，删除文档时清不掉原件，死信排查也反查不回来
+            this.knowledgeDocumentService.attachObject(registration.documentId(), registration.version(),
+                    this.objectStorageService.bucketName(), objectKey);
+            this.knowledgeDocumentService.markStage(registration.documentId(), registration.version(),
+                    KnowledgeDocumentService.STAGE_QUEUED);
             this.documentParsePublisher.publish(new DocumentParseMessage(
                     entCode, registration.documentId(), knowledgeBase.getId(),
                     objectKey, fileName, contentType, registration.version()));
@@ -145,9 +150,14 @@ public class KnowledgeDocumentIngestionService {
      */
     public void parseAndPromote(ManagedDocumentMetadata metadata, InputStream inputStream) {
         DocumentImportRegistration registration = registrationOf(metadata);
+        this.knowledgeDocumentService.markStage(
+                metadata.documentId(), metadata.version(), KnowledgeDocumentService.STAGE_PARSING);
         try {
-            ManagedDocumentLoadResult loadResult =
-                    this.documentLoaderService.loadAndStore(inputStream, metadata);
+            ManagedDocumentLoadResult loadResult = this.documentLoaderService.loadAndStore(
+                    inputStream, metadata,
+                    () -> this.knowledgeDocumentService.markStage(
+                            metadata.documentId(), metadata.version(),
+                            KnowledgeDocumentService.STAGE_EMBEDDING));
             DocumentPromotionResult promotion = this.knowledgeDocumentService.markReady(
                     registration, loadResult.chunkCount(), loadResult.checksumSha256());
             cleanupSupersededVersions(metadata, promotion.supersededVersions());
@@ -164,6 +174,8 @@ public class KnowledgeDocumentIngestionService {
      */
     public void deleteDocument(Long knowledgeBaseId, String documentId) {
         KnowledgeBase knowledgeBase = this.knowledgeBaseService.resolveActive(knowledgeBaseId);
+        // 必须在软删之前取：记录一旦置为 deleted，就再也查不到原件键了
+        List<String> objectKeys = this.knowledgeDocumentService.objectKeysOf(documentId);
         List<Integer> removedVersions = this.knowledgeDocumentService.deleteDocument(documentId);
         String entCode = TenantContext.requireEntCode();
 
@@ -175,6 +187,14 @@ public class KnowledgeDocumentIngestionService {
             } catch (RuntimeException e) {
                 // 尽力语义：向量残留会被资格过滤挡掉，不值得让删除操作失败
                 log.warn("清理文档向量失败：documentId={}, version={}", documentId, version, e);
+            }
+        }
+        for (String objectKey : objectKeys) {
+            try {
+                this.objectStorageService.remove(objectKey);
+            } catch (RuntimeException e) {
+                // 同样尽力：对象残留不影响检索与状态，但要在日志里留痕
+                log.warn("清理对象存储原件失败：objectKey={}", objectKey, e);
             }
         }
     }

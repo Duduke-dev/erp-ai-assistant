@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -29,6 +30,30 @@ public class DocumentParsePublisher {
     private final ObjectMapper objectMapper;
 
     private final MessagingProperties properties;
+
+    /**
+     * 重投一条死信：把原始消息体原样发回主队列。
+     * <p>
+     * 刻意不复用 {@link #publish}：那里有 {@code asyncEnabled} 短路，
+     * 异步被关掉时它会静默跳过——而重投是<b>明确的人工指令</b>，
+     * 静默不发等于"点了重投什么都没发生"，这比报错更难查。
+     */
+    public void republish(String payload) {
+        if (!StringUtils.hasText(payload)) {
+            throw new BusinessException("死信消息体为空，无法重投");
+        }
+        try {
+            this.rabbitTemplate.convertAndSend(
+                    properties.getDocumentExchange(),
+                    properties.getDocumentParseRoutingKey(),
+                    payload);
+            log.info("死信已重投：exchange={}, routingKey={}",
+                    properties.getDocumentExchange(), properties.getDocumentParseRoutingKey());
+        }
+        catch (RuntimeException e) {
+            throw new BusinessException(500, "死信重投失败：" + e.getMessage(), e);
+        }
+    }
 
     /**
      * 投递一条解析任务。

@@ -49,6 +49,14 @@ public class ObjectStorageService {
     private final ObjectStorageProperties properties;
 
     /**
+     * 当前桶名。存进 {@code knowledge_document.bucket}，
+     * 让文档记录自带定位信息——换桶或换存储产品时，历史行仍能指向正确的位置。
+     */
+    public String bucketName() {
+        return this.properties.getBucket();
+    }
+
+    /**
      * 生成对象键，按租户隔离。
      *
      * @param entCode  租户编码

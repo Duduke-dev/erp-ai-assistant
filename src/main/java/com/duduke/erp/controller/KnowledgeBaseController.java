@@ -82,6 +82,19 @@ public class KnowledgeBaseController {
     }
 
     /**
+     * 查询单个文档的最新版本。
+     * <p>
+     * 异步解析期间前端轮询它拿 {@code status} 与 {@code stage}：
+     * 上传接口只代表"已受理"，真正的进度要看这里。
+     */
+    @SaCheckPermission("knowledge:manage")
+    @GetMapping("/{id}/documents/{documentId}")
+    public KnowledgeDocumentVO getDocument(@PathVariable Long id,
+                                           @PathVariable String documentId) {
+        return this.knowledgeDocumentService.getDocument(id, documentId);
+    }
+
+    /**
      * 上传文档。不带 documentId 时为新增或按来源名追加版本；
      * 带上 documentId 表示替换该文档内容，生成新版本。
      * <p>

@@ -113,7 +113,8 @@ app:
     document-parse-routing-key: document.parse
     # 消息队列不可用时切回同步解析的开关，避免「上传」整功能不可用
     async-enabled: true
-    max-attempts: 3
+    # 这里不配重试次数：消费失败直接进死信队列，由死信管理端人工重投。
+    # 解析失败多为确定性错误，自动重试只是把同一错误重跑多遍（详见 MessagingProperties）。
 
   chat:
     # 记忆窗口：保留最近 20 条消息（约 10 轮问答）。太小会丢失上下文，

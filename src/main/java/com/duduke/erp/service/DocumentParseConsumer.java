@@ -49,7 +49,8 @@ public class DocumentParseConsumer {
      *
      * @param payload JSON 消息体（投递方序列化后的字符串）
      */
-    @RabbitListener(queues = "${app.mq.document-parse-queue}")
+    // id 显式命名：运维/测试可按 id 单独启停这个容器，不必动全局开关
+    @RabbitListener(queues = "${app.mq.document-parse-queue}", id = "documentParseListener")
     public void consume(String payload) {
         DocumentParseMessage message = parse(payload);
         log.info("开始消费解析任务：documentId={}, entCode={}",

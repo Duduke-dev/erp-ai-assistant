@@ -50,6 +50,21 @@ public class KnowledgeDocumentService {
     /** 已软删 */
     public static final String STATUS_DELETED = "deleted";
 
+    /** 阶段：已登记并投递，等待消费 */
+    public static final String STAGE_QUEUED = "queued";
+
+    /** 阶段：解析与分块中 */
+    public static final String STAGE_PARSING = "parsing";
+
+    /** 阶段：分块完成，正在写向量（最慢的一步，通常卡在这） */
+    public static final String STAGE_EMBEDDING = "embedding";
+
+    /** 阶段：已完成 */
+    public static final String STAGE_READY = "ready";
+
+    /** 阶段：已失败 */
+    public static final String STAGE_FAILED = "failed";
+
     private final KnowledgeDocumentMapper knowledgeDocumentMapper;
 
     private final RagProperties ragProperties;
@@ -113,6 +128,7 @@ public class KnowledgeDocumentService {
         KnowledgeDocument update = new KnowledgeDocument();
         update.setId(current.getId());
         update.setStatus(STATUS_READY);
+        update.setStage(STAGE_READY);
         update.setChunkCount(chunkCount);
         update.setChecksumSha256(checksumSha256);
         update.setEmbeddingModel(this.ragProperties.getEmbeddingModel());
@@ -135,6 +151,7 @@ public class KnowledgeDocumentService {
         KnowledgeDocument update = new KnowledgeDocument();
         update.setId(current.getId());
         update.setStatus(STATUS_FAILED);
+        update.setStage(STAGE_FAILED);
         update.setChunkCount(0);
         update.setErrorMessage(truncate(errorMessage, 1000));
         update.setUpdatedAt(LocalDateTime.now());
@@ -161,6 +178,93 @@ public class KnowledgeDocumentService {
             removed.add(doc.getVersion());
         }
         return removed;
+    }
+
+    /**
+     * 回写对象存储位置。
+     * <p>
+     * 此前原件键只存在于消息里：消息一旦被消费掉，库里就查不到键——
+     * 删除文档时清不掉对象（留下孤儿对象），死信排查也无法从文档反查原件。
+     */
+    @Transactional
+    public void attachObject(String documentId, Integer version, String bucket, String objectKey) {
+        KnowledgeDocument current = findVersion(documentId, version);
+        if (current == null) {
+            return;
+        }
+        KnowledgeDocument update = new KnowledgeDocument();
+        update.setId(current.getId());
+        update.setBucket(bucket);
+        update.setObjectKey(objectKey);
+        update.setUpdatedAt(LocalDateTime.now());
+        this.knowledgeDocumentMapper.updateById(update);
+    }
+
+    /**
+     * 该文档全部版本的原件键（去重、去空），供删除时一并清理对象存储。
+     * <p>
+     * 必须在删除数据库记录<b>之前</b>取：记录一旦软删，就再也查不到键了。
+     */
+    public List<String> objectKeysOf(String documentId) {
+        return allVersions(documentId).stream()
+                .map(KnowledgeDocument::getObjectKey)
+                .filter(StringUtils::hasText)
+                .distinct()
+                .toList();
+    }
+
+    /**
+     * 更新解析阶段。纯可观测用途，与状态机无关——
+     * 阶段写不进去不应影响导入结果。
+     */
+    @Transactional
+    public void markStage(String documentId, Integer version, String stage) {
+        KnowledgeDocument current = findVersion(documentId, version);
+        if (current == null) {
+            return;
+        }
+        KnowledgeDocument update = new KnowledgeDocument();
+        update.setId(current.getId());
+        update.setStage(stage);
+        update.setUpdatedAt(LocalDateTime.now());
+        this.knowledgeDocumentMapper.updateById(update);
+    }
+
+    /**
+     * 查询单个文档的最新版本，供前端轮询解析进度。
+     */
+    public KnowledgeDocumentVO getDocument(Long knowledgeBaseId, String documentId) {
+        List<KnowledgeDocument> versions = allVersions(documentId);
+        KnowledgeDocument latest = versions.isEmpty() ? null : versions.get(versions.size() - 1);
+        if (latest == null || !knowledgeBaseId.equals(latest.getKnowledgeBaseId())) {
+            throw new IllegalArgumentException("文档不存在或不属于当前租户");
+        }
+        return toVO(latest);
+    }
+
+    /**
+     * 把失败版本重置为 {@code processing}，供死信重投。
+     * <p>
+     * <b>只接受 failed</b>：ready 的文档已经可用，把它重置回去只会让可用状态凭空消失；
+     * 而 {@code markReady} 要求版本必须处于 processing，不重置的话重投必然再次失败。
+     */
+    @Transactional
+    public void resetToProcessing(String documentId, Integer version) {
+        KnowledgeDocument current = findVersion(documentId, version);
+        if (current == null) {
+            throw new IllegalArgumentException("文档版本不存在：" + documentId + "#" + version);
+        }
+        if (!STATUS_FAILED.equals(current.getStatus())) {
+            throw new IllegalArgumentException("只有失败的版本可以重投，当前状态：" + current.getStatus());
+        }
+        KnowledgeDocument update = new KnowledgeDocument();
+        update.setId(current.getId());
+        update.setStatus(STATUS_PROCESSING);
+        update.setStage(STAGE_QUEUED);
+        update.setChunkCount(0);
+        update.setErrorMessage("");
+        update.setUpdatedAt(LocalDateTime.now());
+        this.knowledgeDocumentMapper.updateById(update);
     }
 
     /**
@@ -305,6 +409,7 @@ public class KnowledgeDocumentService {
                 po.getTitle(),
                 po.getVersion(),
                 po.getStatus(),
+                po.getStage(),
                 po.getFileSize(),
                 po.getContentType(),
                 po.getChunkCount(),

@@ -15,6 +15,7 @@ public record KnowledgeDocumentVO(
         String title,
         Integer version,
         String status,
+        String stage,
         Long fileSize,
         String contentType,
         Integer chunkCount,
