@@ -18,15 +18,21 @@ package com.duduke.erp.entity.dto;
  * 消费方在进入业务逻辑前用它显式建立上下文。
  *
  * @param entCode         租户编码，消费侧据此建立上下文
- * @param documentId      知识文档主键
+ * @param documentId      知识文档主键（稳定文档 ID，字符串形态，
+ *                        与 {@code knowledge_document.document_id} 同类型，消费侧可直接使用）
  * @param knowledgeBaseId 所属知识库
  * @param objectKey       原件在对象存储中的键，消费侧据此下载
  * @param fileName        原始文件名，用于判断解析格式
+ * @param contentType     内容类型，随消息带出，省得消费侧按扩展名反推
+ * @param version         本次导入的版本号，消费侧据此定位待晋级版本
+ *                        ——版本号由上传线程登记时产生，不随消息带出就只能重新登记一次
  */
 public record DocumentParseMessage(
         String entCode,
-        Long documentId,
+        String documentId,
         Long knowledgeBaseId,
         String objectKey,
-        String fileName) {
+        String fileName,
+        String contentType,
+        Integer version) {
 }

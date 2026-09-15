@@ -55,7 +55,7 @@ class DocumentParsePublisherTest {
     @DisplayName("投递后消息进入队列，且 JSON 含租户编码（消费侧建上下文的唯一来源）")
     void publishLandsInQueueWithTenantCode() throws Exception {
         DocumentParseMessage message = new DocumentParseMessage(
-                "DEMO", 999_001L, 1L, "DEMO/abc/手册.pdf", "手册.pdf");
+                "DEMO", "doc-999001", 1L, "DEMO/abc/手册.pdf", "手册.pdf", "application/pdf", 3);
 
         this.publisher.publish(message);
 
@@ -66,8 +66,11 @@ class DocumentParsePublisherTest {
 
         JsonNode json = this.objectMapper.readTree(raw.toString());
         assertThat(json.get("entCode").asString()).isEqualTo("DEMO");
-        assertThat(json.get("documentId").asLong()).isEqualTo(999_001L);
+        assertThat(json.get("documentId").asString()).isEqualTo("doc-999001");
         assertThat(json.get("objectKey").asString()).isEqualTo("DEMO/abc/手册.pdf");
+        // version 与 contentType 由上传线程登记时产生，消费侧靠它们定位版本、无需反推
+        assertThat(json.get("version").asInt()).isEqualTo(3);
+        assertThat(json.get("contentType").asString()).isEqualTo("application/pdf");
     }
 
     @Test

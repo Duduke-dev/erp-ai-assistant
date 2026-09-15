@@ -1,7 +1,6 @@
 package com.duduke.erp.controller;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.List;
 
 import com.duduke.erp.common.exception.BusinessException;
@@ -85,6 +84,10 @@ public class KnowledgeBaseController {
     /**
      * 上传文档。不带 documentId 时为新增或按来源名追加版本；
      * 带上 documentId 表示替换该文档内容，生成新版本。
+     * <p>
+     * 异步开启时（{@code app.mq.async-enabled}）接口返回只代表「已受理」：
+     * 版本登记为 processing，解析与向量化由消息队列异步完成。
+     * 分流决策在 {@link KnowledgeDocumentIngestionService} 内部，本处不做判断。
      */
     @SaCheckPermission("knowledge:manage")
     @PostMapping("/{id}/documents")
@@ -95,10 +98,13 @@ public class KnowledgeBaseController {
             throw new BusinessException("上传文件不能为空");
         }
         String fileName = file.getOriginalFilename();
-        try (InputStream inputStream = file.getInputStream()) {
-            this.ingestionService.importFile(id, fileName, file.getContentType(),
-                    file.getSize(), inputStream, documentId);
-        } catch (IOException e) {
+        try {
+            // 读成字节数组：异步链路要把原件写进对象存储，
+            // 同步降级链路也直接消费同一份字节，两条路都需要它
+            this.ingestionService.importDocument(id, fileName, file.getContentType(),
+                    file.getBytes(), documentId);
+        }
+        catch (IOException e) {
             throw new BusinessException(500, "读取上传文件失败", e);
         }
     }
