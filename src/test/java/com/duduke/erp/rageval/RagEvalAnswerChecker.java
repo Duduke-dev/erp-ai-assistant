@@ -19,9 +19,27 @@ import java.util.Locale;
  */
 public class RagEvalAnswerChecker {
 
-    /** 紧邻这些词时，短语处于被否定的位置 */
+    /**
+     * 紧邻这些词时，短语处于被否定的位置。
+     * <p>
+     * 含单字否定「不」「未」「非」是必需的：中文里「不可以跨租户查询」的否定词就是「不」，
+     * 「可」属于禁止短语本身，靠双字词表必然漏判——这正是首轮 v2 评测把
+     * 「**不**可以跨租户查询」判成错误结论的原因。
+     * 单字不会过宽：判定只取短语**紧邻**的前缀，且已限定在同一分句内
+     * （见 {@link #CLAUSE_BOUNDARY}），"…不清楚，可以跨租户查询"这类不会被误豁免。
+     */
     private static final List<String> NEGATION_MARKERS = List.of(
-            "并非", "不是", "不能", "不可", "禁止", "不允许", "无法", "不再", "未能", "没有");
+            "并非", "不是", "不能", "不可", "禁止", "不允许", "无法", "不再", "未能", "没有",
+            "不", "未", "非");
+
+    /**
+     * 分句边界：否定与谨慎语义都只在本分句内生效。
+     * <p>
+     * 必须先切句再匹配，因为下面的匹配是在「去掉标点后的文本」上做的——
+     * 一旦先规范化，句子边界就消失了，「不能。可以跨租户查询。」会被读成一整句，
+     * 后半个肯定句被前句的否定词豁免掉。
+     */
+    private static final String CLAUSE_BOUNDARY = "[。！？；;，,：:、\\r\\n]+";
 
     /** 表示资料不足以确认结论的谨慎词 */
     private static final List<String> UNCERTAINTY_MARKERS = List.of(
@@ -58,7 +76,7 @@ public class RagEvalAnswerChecker {
         List<String> violations = new ArrayList<>();
         for (String phrase : forbiddenPhrases == null ? List.<String>of() : forbiddenPhrases) {
             String target = normalize(phrase);
-            if (!target.isEmpty() && containsForbiddenAssertion(normalized, target)) {
+            if (!target.isEmpty() && containsForbiddenAssertion(answer, target)) {
                 // 报告里保留原始短语，便于直接定位到底是哪条结论错了
                 violations.add(phrase);
             }
@@ -84,15 +102,28 @@ public class RagEvalAnswerChecker {
 
     /**
      * 短语是否以肯定语义出现（未被否定、且不在谨慎语境内）。
+     * <p>
+     * 逐分句判断：先按标点切句，再在「该句规范化后的文本」里找短语。
+     * 这样否定词与谨慎词的作用范围天然被限制在同一句内，
+     * 不需要（也不应该）跨句继承。
+     *
+     * @param answer           模型原始回答（保留标点，切句依赖它）
+     * @param normalizedPhrase 已规范化的禁止短语
      */
-    private boolean containsForbiddenAssertion(String normalizedAnswer, String normalizedPhrase) {
-        int index = normalizedAnswer.indexOf(normalizedPhrase);
-        while (index >= 0) {
-            String prefix = normalizedAnswer.substring(0, index);
-            if (!isNegated(prefix) && !isInsideUncertaintyScope(prefix, normalizedPhrase)) {
-                return true;
+    private boolean containsForbiddenAssertion(String answer, String normalizedPhrase) {
+        if (answer == null) {
+            return false;
+        }
+        for (String clause : answer.split(CLAUSE_BOUNDARY)) {
+            String normalizedClause = normalize(clause);
+            int index = normalizedClause.indexOf(normalizedPhrase);
+            while (index >= 0) {
+                String prefix = normalizedClause.substring(0, index);
+                if (!isNegated(prefix) && !isInsideUncertaintyScope(prefix, normalizedPhrase)) {
+                    return true;
+                }
+                index = normalizedClause.indexOf(normalizedPhrase, index + normalizedPhrase.length());
             }
-            index = normalizedAnswer.indexOf(normalizedPhrase, index + normalizedPhrase.length());
         }
         return false;
     }

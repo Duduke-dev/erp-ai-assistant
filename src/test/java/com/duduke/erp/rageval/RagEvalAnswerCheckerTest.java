@@ -50,6 +50,30 @@ class RagEvalAnswerCheckerTest {
     }
 
     @Test
+    @DisplayName("单字否定「不」也要豁免：不可以跨租户查询 ≠ 可以跨租户查询")
+    void singleCharacterNegationIsRecognised() {
+        RagEvalAnswerChecker.RagEvalAnswerCheck check = this.checker.check(
+                "业务数据不可以跨租户查询，任何人不得跨租户取数。",
+                List.of(), List.of("可以跨租户查询"));
+
+        assertThat(check.criticalFactViolations())
+                .as("「不可以」的否定词是单字「不」，双字词表必然漏判")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("否定不跨句生效：前一句的「不能」不能豁免后一句的肯定结论")
+    void negationDoesNotLeakAcrossSentences() {
+        RagEvalAnswerChecker.RagEvalAnswerCheck check = this.checker.check(
+                "资料中没有明确规定。实际上可以跨租户查询。",
+                List.of(), List.of("可以跨租户查询"));
+
+        assertThat(check.criticalFactViolations())
+                .as("分句判断必须限定作用范围，否则前句的否定会豁免后句的错误结论")
+                .containsExactly("可以跨租户查询");
+    }
+
+    @Test
     @DisplayName("给出错误结论时判违规")
     void assertedForbiddenPhraseIsViolation() {
         RagEvalAnswerChecker.RagEvalAnswerCheck check = this.checker.check(

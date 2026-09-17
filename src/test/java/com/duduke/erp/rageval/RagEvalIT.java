@@ -86,7 +86,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(properties = "spring.rabbitmq.listener.simple.auto-startup=false")
 class RagEvalIT {
 
-    private static final String VERSION = "v1";
+    /**
+     * 数据集版本。
+     * <p>
+     * v1（6 份文档 / 15 条用例）保留不动——它的指标已固化在 `v1/baseline.json`，
+     * 用于对照"扩数据集前后"的变化。
+     * v2 把目标文档扩到 15 份、用例扩到 43 条，让 Recall@5 恢复区分度
+     * （v1 里 TOP_K=5 对 6 份文档，必中，指标没有意义）。
+     */
+    private static final String VERSION = "v2";
 
     private static final String ENT_CODE = "DEMO";
 
