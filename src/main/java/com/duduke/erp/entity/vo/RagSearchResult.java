@@ -9,6 +9,7 @@ package com.duduke.erp.entity.vo;
 public record RagSearchResult(
         String content,
         String source,
+        String documentId,
         Integer chunkIndex,
         Double score) {
 }

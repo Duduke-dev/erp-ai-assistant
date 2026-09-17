@@ -1,0 +1,15 @@
+{"caseId": "cx200-spindle-speed", "question": "CX-200 主轴的最高转速是多少？", "expectedSources": ["product-manual.txt"], "answerable": true, "keyFacts": ["4500 转每分钟"], "forbiddenPhrases": ["2000 转每分钟"], "category": "产品参数"}
+{"caseId": "cx200-unsuitable-part", "question": "CX-200 不适用于哪类工件的加工？", "expectedSources": ["product-manual.txt"], "answerable": true, "keyFacts": ["铸造毛坯"], "forbiddenPhrases": [], "category": "产品参数"}
+{"caseId": "cx200-install-condition", "question": "CX-200 安装时对环境的温度和湿度有什么要求？", "expectedSources": ["product-manual.txt"], "answerable": true, "keyFacts": ["15 至 35 摄氏度", "75%"], "forbiddenPhrases": [], "category": "安装条件"}
+{"caseId": "inventory-safety-stock", "question": "原材料的安全库存是多少天用量？由哪个部门复核？", "expectedSources": ["inventory-guide.txt"], "answerable": true, "keyFacts": ["30 天用量", "计划部"], "forbiddenPhrases": ["45 天用量"], "category": "库存管理"}
+{"caseId": "inventory-cycle-count", "question": "A 类物料和 B 类物料的盘点周期分别是多久？", "expectedSources": ["inventory-guide.txt"], "answerable": true, "keyFacts": ["A 类物料每月盘点一次", "B 类物料每季度盘点一次"], "forbiddenPhrases": ["每两周一次"], "category": "库存管理"}
+{"caseId": "inventory-obsolete-material", "question": "呆滞料是如何认定的？", "expectedSources": ["inventory-guide.txt"], "answerable": true, "keyFacts": ["180 天"], "forbiddenPhrases": [], "category": "库存管理"}
+{"caseId": "sales-order-approval", "question": "销售订单金额达到多少需要总经理审批？", "expectedSources": ["sales-order-guide.txt"], "answerable": true, "keyFacts": ["200 万元"], "forbiddenPhrases": ["销售经理审批 200 万元"], "category": "销售流程"}
+{"caseId": "sales-order-lead-time", "question": "标准产品和非标产品的交期分别是多久？", "expectedSources": ["sales-order-guide.txt"], "answerable": true, "keyFacts": ["15 个工作日", "30 个工作日"], "forbiddenPhrases": [], "category": "销售流程"}
+{"caseId": "maintenance-level-three", "question": "三级保养由哪个部门组织？需要停机多久？", "expectedSources": ["maintenance-guide.txt"], "answerable": true, "keyFacts": ["设备部", "3 天"], "forbiddenPhrases": ["一级保养由设备部组织"], "category": "设备维护"}
+{"caseId": "quality-aql-critical", "question": "关键尺寸类物料的 AQL 取值是多少？", "expectedSources": ["quality-guide.txt"], "answerable": true, "keyFacts": ["0.65"], "forbiddenPhrases": ["关键尺寸类物料的 AQL 取 2.5"], "category": "质量检验"}
+{"caseId": "quality-first-article", "question": "首件检验由谁共同确认？检验记录需要保存多久？", "expectedSources": ["quality-guide.txt"], "answerable": true, "keyFacts": ["质检员与操作工", "两年"], "forbiddenPhrases": [], "category": "质量检验"}
+{"caseId": "security-cross-tenant", "question": "业务数据可以跨租户查询吗？", "expectedSources": ["safety-guide.txt"], "answerable": true, "keyFacts": ["不得跨租户查询"], "forbiddenPhrases": ["可以跨租户查询"], "category": "信息安全"}
+{"caseId": "unanswerable-revenue", "question": "华信精密 2025 年的营业收入是多少？", "expectedSources": [], "answerable": false, "keyFacts": [], "forbiddenPhrases": ["营业收入为", "亿元"], "category": "不可答"}
+{"caseId": "unanswerable-headcount", "question": "华信精密目前有多少名员工？", "expectedSources": [], "answerable": false, "keyFacts": [], "forbiddenPhrases": ["名员工"], "category": "不可答"}
+{"caseId": "unanswerable-general-manager", "question": "华信精密的总经理是谁？", "expectedSources": [], "answerable": false, "keyFacts": [], "forbiddenPhrases": ["总经理是"], "category": "不可答"}

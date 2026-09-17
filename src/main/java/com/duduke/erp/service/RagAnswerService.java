@@ -106,6 +106,7 @@ public class RagAnswerService {
         return new RagSearchResult(
                 document.getText(),
                 String.valueOf(document.getMetadata().getOrDefault("source", "")),
+                String.valueOf(document.getMetadata().getOrDefault("document_id", "")),
                 chunkIndex instanceof Number number ? number.intValue() : null,
                 document.getScore());
     }
