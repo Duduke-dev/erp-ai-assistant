@@ -49,7 +49,7 @@ import static org.mockito.BDDMockito.given;
  * <h3>为什么还要 mock 掉 {@link DocumentLoaderService}</h3>
  * 兜底：万一主队列容器被别的路径启动，解析也不会真的去调模型。
  */
-@SpringBootTest(properties = "spring.rabbitmq.listener.simple.auto-startup=false")
+@MqIsolatedTest
 class DocumentParseDeadLetterTest {
 
     private static final String ENT_CODE = "DEMO";

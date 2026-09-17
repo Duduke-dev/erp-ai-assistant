@@ -123,7 +123,12 @@ class TokenUsageRecorderTest {
         this.recorder.record(this.modelName, 100, 100, 200);
 
         String period = LocalDate.now().format(PERIOD_FORMAT);
-        List<TokenUsageVO> monthly = this.billingService.monthlyUsage(period, period);
+        // 按本用例的模型名筛，而不是断言「当月只有 1 行」：
+        // 库里存在真实用量时（例如运行过 RagEvalIT 这类会真调模型的端到端评测），
+        // 后一种写法必然失败——它断言的其实是"这个库里没有别人的数据"。
+        List<TokenUsageVO> monthly = this.billingService.monthlyUsage(period, period).stream()
+                .filter(row -> this.modelName.equals(row.modelName()))
+                .toList();
 
         assertThat(monthly).hasSize(1);
         assertThat(monthly.get(0).totalTokens()).isEqualTo(400L);

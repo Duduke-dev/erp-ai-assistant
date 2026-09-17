@@ -33,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 会被消费者抢先取走，{@code receiveAndConvert} 拿到 null —— 表现为"投递没生效"，
  * 实则是被消费了。这里用测试级属性停用自启动，让投递侧可被单独验证。
  */
-@SpringBootTest(properties = "spring.rabbitmq.listener.simple.auto-startup=false")
+@MqIsolatedTest
 class DocumentParsePublisherTest {
 
     @Autowired

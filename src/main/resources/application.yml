@@ -2,6 +2,15 @@ spring:
   application:
     name: erp-ai-assistant
 
+  # 本地开发默认启用 local profile → 自动加载 application-local.yml
+  # （该文件放本机凭据，已在 .gitignore 中，不进仓库）。
+  #
+  # 用 default 而不是 active：default 只在**未显式指定** profile 时生效。
+  # 将来 CI / 生产用 --spring.profiles.active=prod 启动时，本项自动让位，
+  # 不会把本机配置带到部署环境里去。若写死 active，那个赋值永远优先，反而不好收场。
+  profiles:
+    default: local
+
   # RabbitMQ：文档「上传 → 解析 → 向量化」异步化
   rabbitmq:
     host: ${ERP_MQ_HOST:localhost}

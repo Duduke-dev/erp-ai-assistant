@@ -53,7 +53,7 @@ import static org.mockito.Mockito.verify;
  * 该配置对象只属于本测试类的上下文（本类带独立 properties，不会与其它类共用），
  * 且改后在 {@code finally} 复位，不会污染其它用例。
  */
-@SpringBootTest(properties = "spring.rabbitmq.listener.simple.auto-startup=false")
+@MqIsolatedTest
 class DocumentAsyncImportTest {
 
     private static final String ENT_CODE = "DEMO";
