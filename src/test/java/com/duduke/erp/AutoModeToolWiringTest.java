@@ -103,22 +103,19 @@ class AutoModeToolWiringTest {
         ask(token, "auto");
 
         List<ToolCallback> tools = optionsOf(captor.getValue()).getToolCallbacks();
-        // 与注册表快照的过滤口径一致：这里核对的是"装进请求的就是过滤后的"
-        // 39 个业务 Tool + 1 个图表系统 Tool（图表 Tool 不查业务数据，不走权限过滤）
-        assertThat(tools).isNotEmpty().hasSize(40);
-        assertThat(tools).anySatisfy(tool ->
-                assertThat(tool.getToolDefinition().name())
-                        .as("图表 Tool 必须挂上，否则模型无从声明图表")
-                        .isEqualTo(ToolNames.CHART_PLAN));
-        // 图表 Tool 是系统内部工具，没有「数据权限」可言，故从权限校验里排除；
-        // 其余业务 Tool 必须全部有权限声明（fail-closed）
-        assertThat(tools)
-                .filteredOn(tool -> !ToolNames.CHART_PLAN.equals(tool.getToolDefinition().name()))
-                .as("除系统图表 Tool 外，装进请求的每个 Tool 都必须有权限声明")
-                .isNotEmpty()
-                .allSatisfy(tool ->
-                        assertThat(ToolPermissionCatalog.forToolName(tool.getToolDefinition().name()))
-                                .isNotNull());
+        List<String> names = tools.stream().map(tool -> tool.getToolDefinition().name()).toList();
+
+        // 这里刻意断言"包含"而不是"总数 = 40"：
+        // llm_tool 是全局配置表，管理端随时可能创建真实的动态 Tool，
+        // 总数会随之变化；而"39 个代码 Tool 是否全部装进请求"才是这条用例要守的东西。
+        assertThat(names)
+                .as("模块权限齐全时，目录里声明的业务 Tool 必须全部装进请求")
+                .containsAll(ToolPermissionCatalog.declaredToolNames());
+        assertThat(names)
+                .as("图表 Tool 必须挂上，否则模型无从声明图表")
+                .contains(ToolNames.CHART_PLAN);
+        // 注：「每个 Tool 都必须有权限来源」这条不变量由 ToolRegistryServiceTest 覆盖——
+        // 那里能同时看见代码 Tool 与动态 Tool 的权限映射，比在这里反推更直接。
     }
 
     // knowledge 模式「不挂 Tool」这条断言暂时无法在集成测试里验证：

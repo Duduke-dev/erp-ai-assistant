@@ -45,7 +45,13 @@ import org.springframework.stereotype.Service;
 @Service
 public class RagContextFormatter implements QueryAugmenter {
 
-    private static final String CITATION_INSTRUCTION = """
+    /**
+     * knowledge 模式的指令：资料是<b>唯一依据</b>。
+     * <p>
+     * 「不要使用资料之外的知识」这句是刻意的：knowledge 模式就该在资料不足时明说，
+     * 而不是用模型自身的知识补出一个看似完整的回答。
+     */
+    private static final String CITATION_INSTRUCTION_STRICT = """
 
             ---
             回答要求：
@@ -53,6 +59,25 @@ public class RagContextFormatter implements QueryAugmenter {
             2. 引用资料时在句末标注对应的方括号编号，例如 [1]、[2]；
             3. 不得复述或编造未出现在上述资料中的方括号编号；
             4. 若资料不足以回答问题，直接说明「现有资料无法回答」。
+            """;
+
+    /**
+     * auto 模式的指令：资料是<b>业务数据的补充</b>，不是唯一依据。
+     * <p>
+     * 必须与严格版分开，否则会与工具打架——实测症状：auto 模式调用了工具、也拿到了结果，
+     * 但模型只是"资料里没有提到"就答「现有资料无法回答」，把工具数据一并丢了。
+     * 原因就在严格版第 1 条把工具结果划成了"资料之外的知识"、第 4 条又给了它退路。
+     */
+    private static final String CITATION_INSTRUCTION_ASSISTIVE = """
+
+            ---
+            回答要求：
+            1. 上面标注 [编号] 的资料是补充依据（制度、流程、规范）；
+               若本轮通过工具查到了业务数据，以工具返回的结果为准；
+            2. 引用资料时在句末标注对应的方括号编号，例如 [1]、[2]；
+            3. 不得复述或编造未出现在上述资料中的方括号编号；
+            4. 资料与当前问题无关时直接忽略它，继续用工具结果作答——
+               不要因为「资料里没提到」就拒绝回答业务问题。
             """;
 
     /** 用户问题中的方括号编号，用于防伪造改写 */
@@ -85,8 +110,34 @@ public class RagContextFormatter implements QueryAugmenter {
         RECALLED.remove();
     }
 
+    /**
+     * 严格版增强器，供 knowledge 模式使用。
+     * <p>
+     * 与 {@link #augment}（默认实现）等价，单独开一个入口是为了让调用点的意图显式可读。
+     */
+    public QueryAugmenter strictAugmenter() {
+        return this::augment;
+    }
+
+    /**
+     * 协作版增强器，供 auto 模式使用：业务数据优先，资料只作补充。
+     */
+    public QueryAugmenter assistiveAugmenter() {
+        return (query, documents) -> this.augment(query, documents, CITATION_INSTRUCTION_ASSISTIVE);
+    }
+
+    /**
+     * 默认增强器 = 严格版。
+     * <p>
+     * 保留这个默认实现而不是让调用方都必须显式选：本类原本就是为 knowledge 场景写的，
+     * 直接走默认行为的老调用点（含既有测试）语义不变。
+     */
     @Override
     public Query augment(Query query, List<Document> documents) {
+        return augment(query, documents, CITATION_INSTRUCTION_STRICT);
+    }
+
+    private Query augment(Query query, List<Document> documents, String instruction) {
         List<Document> usable = documents == null ? List.of() : documents;
         // 整体替换而非追加，避免线程复用导致上一轮数据串入
         RECALLED.set(new ArrayList<>(usable));
@@ -111,7 +162,7 @@ public class RagContextFormatter implements QueryAugmenter {
                     .append(document.getText())
                     .append("\n\n");
         }
-        context.append(CITATION_INSTRUCTION);
+        context.append(instruction);
         context.append("问题：").append(sanitizeQuestion(query.text()));
 
         return query.mutate().text(context.toString()).build();

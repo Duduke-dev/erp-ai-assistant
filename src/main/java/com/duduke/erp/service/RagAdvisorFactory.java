@@ -50,9 +50,14 @@ public class RagAdvisorFactory {
      * @param threshold             相似度阈值
      * @param previousUserQuestions 会话内的历史提问（正序），用于补全省略式追问；
      *                              为空表示无历史，此时不做改写
+     * @param knowledgeMode         true 用严格版指令（资料是唯一依据）；
+     *                              false（auto）用协作版（业务数据优先，资料仅作补充）。
+     *                              两套指令必须分开——用严格版会让模型因「资料没提到」
+     *                              而丢掉工具已经查回来的数据
      */
     public RetrievalAugmentationAdvisor create(Long knowledgeBaseId, int topK, double threshold,
-                                               List<String> previousUserQuestions) {
+                                               List<String> previousUserQuestions,
+                                               boolean knowledgeMode) {
         if (topK < 1 || topK > this.ragProperties.getOversampleMax()) {
             throw new IllegalArgumentException(
                     "topK 超出允许范围：1 ~ " + this.ragProperties.getOversampleMax());
@@ -90,7 +95,9 @@ public class RagAdvisorFactory {
         return RetrievalAugmentationAdvisor.builder()
                 .documentRetriever(eligibleRetriever)
                 .queryTransformers(queryRewriter)
-                .queryAugmenter(this.contextFormatter)
+                .queryAugmenter(knowledgeMode
+                        ? this.contextFormatter.strictAugmenter()
+                        : this.contextFormatter.assistiveAugmenter())
                 .taskExecutor(this.ragTaskExecutor)
                 .build();
     }

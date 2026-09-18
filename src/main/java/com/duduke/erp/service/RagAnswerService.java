@@ -54,8 +54,10 @@ public class RagAnswerService {
         double threshold = knowledgeMode
                 ? this.ragProperties.getKnowledgeSimilarityThreshold()
                 : this.ragProperties.getAutoSimilarityThreshold();
+        // 模式一并传下去：它决定注入哪套回答指令（严格版 vs 协作版），
+        // 而这直接关系到「模型是否会因为资料没提到就丢掉工具查回来的数据」
         return this.ragAdvisorFactory.create(knowledgeBase.getId(), topK, threshold,
-                previousUserQuestions);
+                previousUserQuestions, knowledgeMode);
     }
 
     /**

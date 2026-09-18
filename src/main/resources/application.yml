@@ -144,8 +144,12 @@ app:
   # 直接拿来会把全部相关结果滤掉。换模型后必须重新标定。
   rag:
     auto-top-k: 5
-    # auto 模式带业务 Tool，知识只是辅助，阈值取偏精度一侧
-    auto-similarity-threshold: 0.35
+    # auto 模式带业务 Tool，知识只是辅助，阈值取偏精度一侧。
+    # 取 0.5 是"宁漏勿乱"的取舍：实测相关样本低至 0.4278，因此这一档也会被滤掉——
+    # 但 auto 有工具兜底，注入弱相关段落反而会干扰模型使用工具结果（实际发生过：
+    # 检索到的无关文档让模型忽略了工具返回的数据，直接答「现有资料无法回答」）。
+    # 需要更高召回时用 knowledge 模式（那里阈值偏召回一侧）。
+    auto-similarity-threshold: 0.5
     knowledge-top-k: 8
     # knowledge 模式纯知识问答，召回优先，阈值取偏召回一侧
     knowledge-similarity-threshold: 0.25
