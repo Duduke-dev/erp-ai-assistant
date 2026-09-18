@@ -39,7 +39,7 @@ class BillingQuotaGuardTest extends AbstractApiTest {
     void rejectsWhenQuotaExhausted() throws Exception {
         insertExhaustedAccount();
         try {
-            String token = token("admin");
+            String token = testTenantToken();
             String body = """
                     {"question":"查询主仓库存","mode":"auto"}
                     """;
@@ -66,7 +66,7 @@ class BillingQuotaGuardTest extends AbstractApiTest {
         // 演示库默认没有账户；这里确保没有本用例的残留即可
         deleteTestAccount();
 
-        String token = token("admin");
+        String token = testTenantToken();
         String body = """
                 {"question":"你好","mode":"knowledge"}
                 """;
@@ -83,7 +83,7 @@ class BillingQuotaGuardTest extends AbstractApiTest {
     }
 
     private void insertExhaustedAccount() {
-        TenantContext.set("DEMO", 1L);
+        TenantContext.set(TEST_ENT_CODE, null);
         try {
             BillingAccount account = new BillingAccount();
             account.setPlanCode(TEST_PLAN_CODE);
@@ -99,7 +99,7 @@ class BillingQuotaGuardTest extends AbstractApiTest {
     }
 
     private void deleteTestAccount() {
-        TenantContext.set("DEMO", 1L);
+        TenantContext.set(TEST_ENT_CODE, null);
         try {
             this.accountMapper.delete(Wrappers.<BillingAccount>lambdaQuery()
                     .eq(BillingAccount::getPlanCode, TEST_PLAN_CODE));

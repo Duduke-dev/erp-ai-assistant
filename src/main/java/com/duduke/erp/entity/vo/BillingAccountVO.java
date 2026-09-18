@@ -5,6 +5,9 @@ import java.math.BigDecimal;
 /**
  * 计费账户展示对象。
  *
+ * @param id             账户主键。<b>必须下发</b>——充值（{@code POST /accounts/{id}/recharges}）
+ *                       与改套餐（{@code PUT /accounts/{id}}）都以 id 定位，
+ *                       不下发 id 等于前端拿不到任何可用标识，这两个操作只能停在纸上
  * @param planCode       当前套餐编码
  * @param balance        账户余额
  * @param monthlyQuota   本周期 token 配额
@@ -15,6 +18,7 @@ import java.math.BigDecimal;
  * @param status         active / suspended / arrears
  */
 public record BillingAccountVO(
+        Long id,
         String planCode,
         BigDecimal balance,
         Long monthlyQuota,

@@ -54,6 +54,14 @@ public class BillingService {
     /** 交易类型：扣费 */
     private static final String TYPE_DEDUCTION = "deduction";
 
+    /**
+     * 金额小数位，**必须与 V16 迁移后的金额列精度一致**（NUMERIC(18,6)）。
+     * <p>
+     * 取 6 位而不是 2 位：单价按「每千 token」定义，单次消耗常在 0.001~0.01 元量级，
+     * 按「分」舍入会被抹成 0.00（余额永不减少）。展示与开票时再格式化回 2 位。
+     */
+    private static final int MONEY_SCALE = 6;
+
     private final BillingAccountMapper accountMapper;
 
     private final TokenUsageDailyMapper dailyMapper;
@@ -81,7 +89,7 @@ public class BillingService {
         long quota = account.getMonthlyQuota() == null ? 0L : account.getMonthlyQuota();
         long used = account.getUsedTokens() == null ? 0L : account.getUsedTokens();
         // 剩余允许为负：超额就是超额。夹到 0 会把「已欠额度」掩盖成「刚好用完」
-        return new BillingAccountVO(account.getPlanCode(), account.getBalance(),
+        return new BillingAccountVO(account.getId(), account.getPlanCode(), account.getBalance(),
                 quota, used, quota - used, account.getStatus());
     }
 
@@ -220,16 +228,20 @@ public class BillingService {
         if (rule == null) {
             return BigDecimal.ZERO;
         }
-        // 单价按「每千 token」定义，先乘数量再除 1000；
-        // 中间保留 6 位避免过早舍入，最终按金额精度留 2 位
+        // 单价按「每千 token」定义，先乘数量再除 1000。
+        //
+        // 精度必须留 6 位而不是 2 位（V16 迁移把金额列也统一到了 6 位）：
+        // 单次对话消耗常在 0.001~0.01 元量级，按「分」舍入会被抹成 0.00 ——
+        // 表现为「余额永不减少、流水里全是 0 元扣费」。钱按真实值记账，
+        // 「分」只作为展示与开票时的格式化单位。
         BigDecimal perThousand = BigDecimal.valueOf(1000);
         BigDecimal promptCost = value(rule.getInputPrice())
                 .multiply(BigDecimal.valueOf(promptTokens))
-                .divide(perThousand, 6, RoundingMode.HALF_UP);
+                .divide(perThousand, MONEY_SCALE, RoundingMode.HALF_UP);
         BigDecimal completionCost = value(rule.getOutputPrice())
                 .multiply(BigDecimal.valueOf(completionTokens))
-                .divide(perThousand, 6, RoundingMode.HALF_UP);
-        return promptCost.add(completionCost).setScale(2, RoundingMode.HALF_UP);
+                .divide(perThousand, MONEY_SCALE, RoundingMode.HALF_UP);
+        return promptCost.add(completionCost).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
     }
 
     /** 本租户账户（唯一索引保证最多一条） */

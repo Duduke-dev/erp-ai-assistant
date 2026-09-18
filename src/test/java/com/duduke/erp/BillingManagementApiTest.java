@@ -57,7 +57,7 @@ class BillingManagementApiTest extends AbstractApiTest {
 
     @AfterEach
     void cleanUp() {
-        TenantContext.set("DEMO", 1L);
+        TenantContext.set(TEST_ENT_CODE, null);
         try {
             if (this.planCode != null) {
                 this.accountMapper.delete(Wrappers.<BillingAccount>lambdaQuery()
@@ -76,7 +76,7 @@ class BillingManagementApiTest extends AbstractApiTest {
     @Test
     @DisplayName("套餐 创建 → 查询 → 更新 → 删除 全流程")
     void planCrudRoundTrip() throws Exception {
-        String token = token("admin");
+        String token = testTenantToken();
         this.planCode = uniquePlanCode();
 
         Long id = createPlan(token, this.planCode, "基础版", 1_000_000L);
@@ -100,7 +100,7 @@ class BillingManagementApiTest extends AbstractApiTest {
     @Test
     @DisplayName("套餐编码重复被拒")
     void rejectsDuplicatePlanCode() throws Exception {
-        String token = token("admin");
+        String token = testTenantToken();
         this.planCode = uniquePlanCode();
         createPlan(token, this.planCode, "基础版", 100L);
 
@@ -116,12 +116,12 @@ class BillingManagementApiTest extends AbstractApiTest {
     @Test
     @DisplayName("套餐被账户引用时不可删除（含跨租户引用）")
     void rejectsDeletingReferencedPlan() throws Exception {
-        String token = token("admin");
+        String token = testTenantToken();
         this.planCode = uniquePlanCode();
         Long planId = createPlan(token, this.planCode, "基础版", 100L);
 
         // 造一个引用该套餐的账户（走真实租户上下文入库）
-        TenantContext.set("DEMO", 1L);
+        TenantContext.set(TEST_ENT_CODE, null);
         try {
             BillingAccount account = new BillingAccount();
             account.setPlanCode(this.planCode);
@@ -158,7 +158,7 @@ class BillingManagementApiTest extends AbstractApiTest {
     @Test
     @DisplayName("价格规则可新增与删除，且同模型同生效日不可重复")
     void priceRuleCreateAndDuplicateGuard() throws Exception {
-        String token = token("admin");
+        String token = testTenantToken();
         String model = "model-" + UUID.randomUUID().toString().substring(0, 8);
         LocalDate date = LocalDate.of(2026, 1, 1);
 

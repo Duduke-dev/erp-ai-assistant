@@ -35,9 +35,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * 计费管理端 4b：账户 / 交易 / 发票。
  * <p>
- * <b>注意</b>：本用例会在演示租户下建账户，而账户表对 {@code ent_code} 有唯一约束。
+ * <b>注意</b>：本用例会建账户，而账户表对 {@code ent_code} 有唯一约束。
  * 若清理失败，其它走 /api/chat 的用例会受影响（配额校验会读到这个账户）。
  * 因此清理放在 {@code finally}，且按本用例专属的 planCode 精确定位。
+ * <p>
+ * 账户建在<b>测试专属租户</b>（{@code AbstractApiTest#testTenantToken()}）而不是演示租户：
+ * 演示租户会被真实使用，一旦其中有账户，本用例的开户步骤必然撞唯一约束；
+ * 更糟的是清理逻辑曾按 {@code type='recharge'} 全删，把真实充值流水一起删掉了。
  */
 class BillingAccountManagementTest extends AbstractApiTest {
 
@@ -55,17 +59,30 @@ class BillingAccountManagementTest extends AbstractApiTest {
 
     private String planCode;
 
+    /**
+     * 本用例充值流水专用的备注，形如 {@code it-recharge-<uuid>}。
+     * <p>
+     * 清理必须凭它精确删除。**曾经按 {@code type = 'recharge'} 全删**，
+     * 那条注释写着「本用例是唯一造 recharge 流水的地方」——这个前提
+     * 只在"该租户没有任何真实充值"时成立；一旦演示租户被真实使用，
+     * 跑一次测试就会把真实充值流水删掉（已实际发生过，导致账实不符）。
+     * 测试可以假设自己的数据独立，但不能假设**别人的数据不存在**。
+     */
+    private String rechargeRemark;
+
     @AfterEach
     void cleanUp() {
-        TenantContext.set("DEMO", 1L);
+        TenantContext.set(TEST_ENT_CODE, null);
         try {
             if (this.planCode == null) {
                 return;
             }
             // billing_transaction 没有 account_id 列（表结构如此），
-            // 因此按类型清理：本用例是唯一造 recharge 流水的地方
-            this.transactionMapper.delete(Wrappers.<BillingTransaction>lambdaQuery()
-                    .eq(BillingTransaction::getType, "recharge"));
+            // 只能按备注定位——正因为没有外键可依，才更要保证条件足够窄
+            if (this.rechargeRemark != null) {
+                this.transactionMapper.delete(Wrappers.<BillingTransaction>lambdaQuery()
+                        .eq(BillingTransaction::getRemark, this.rechargeRemark));
+            }
             this.accountMapper.delete(Wrappers.<BillingAccount>lambdaQuery()
                     .eq(BillingAccount::getPlanCode, this.planCode));
             this.planMapper.delete(Wrappers.<BillingPlan>lambdaQuery()
@@ -81,12 +98,13 @@ class BillingAccountManagementTest extends AbstractApiTest {
     @Test
     @DisplayName("开户 → 充值 → 查流水：流水金额为正且余额正确")
     void accountLifecycleAndRecharge() throws Exception {
-        String token = token("admin");
+        String token = testTenantToken();
         Long planId = createPlan(token);
         Long accountId = createAccount(token);
+        this.rechargeRemark = "it-recharge-" + UUID.randomUUID();
         try {
             String rechargeBody = this.objectMapper.writeValueAsString(
-                    new BillingRechargeDTO(new BigDecimal("100.00"), "首次充值"));
+                    new BillingRechargeDTO(new BigDecimal("100.00"), this.rechargeRemark));
             this.mockMvc.perform(post("/api/billing/accounts/" + accountId + "/recharges")
                             .header("satoken", token)
                             .contentType(MediaType.APPLICATION_JSON)
@@ -100,12 +118,23 @@ class BillingAccountManagementTest extends AbstractApiTest {
 
             JsonNode rows = readData(response);
             assertThat(rows.isArray()).isTrue();
-            JsonNode first = rows.get(0);
-            assertThat(first.get("type").asString()).isEqualTo("recharge");
-            assertThat(first.get("amount").decimalValue())
+
+            // 定位"本用例那一条"，而不是取 get(0)：
+            // 取首条等于假设"库里没有更新的流水"，而真实使用会不断产生新流水
+            JsonNode rechargeRow = null;
+            for (JsonNode row : rows) {
+                if (row.hasNonNull("remark") && this.rechargeRemark.equals(row.get("remark").asString())) {
+                    rechargeRow = row;
+                    break;
+                }
+            }
+            assertThat(rechargeRow).as("应能按备注找到本用例的充值流水").isNotNull();
+            assertThat(rechargeRow.get("type").asString()).isEqualTo("recharge");
+            assertThat(rechargeRow.get("amount").decimalValue())
                     .as("充值金额应为正；扣费才是负数")
                     .isEqualByComparingTo(new BigDecimal("100.00"));
-            assertThat(first.get("balanceAfter").decimalValue())
+            assertThat(rechargeRow.get("balanceAfter").decimalValue())
+                    .as("充值后的余额应等于充值金额（该账户此前无余额）")
                     .isEqualByComparingTo(new BigDecimal("100.00"));
         }
         finally {
@@ -117,7 +146,7 @@ class BillingAccountManagementTest extends AbstractApiTest {
     @Test
     @DisplayName("重复开户被拒（账户表对租户唯一）")
     void rejectsDuplicateAccount() throws Exception {
-        String token = token("admin");
+        String token = testTenantToken();
         Long planId = createPlan(token);
         Long accountId = createAccount(token);
         try {
@@ -138,7 +167,7 @@ class BillingAccountManagementTest extends AbstractApiTest {
     @Test
     @DisplayName("开户指向不存在的套餐被拒（写侧也保证引用有效）")
     void rejectsUnknownPlan() throws Exception {
-        String token = token("admin");
+        String token = testTenantToken();
         String body = this.objectMapper.writeValueAsString(
                 new BillingAccountSaveDTO("no_such_plan_" + UUID.randomUUID(), 1L, "active"));
 
@@ -152,7 +181,7 @@ class BillingAccountManagementTest extends AbstractApiTest {
     @Test
     @DisplayName("按账期开票：无扣费流水时金额为 0，且同账期不可重复开票")
     void invoiceGenerationAndDuplicateGuard() throws Exception {
-        String token = token("admin");
+        String token = testTenantToken();
 
         String response = this.mockMvc.perform(post("/api/billing/invoices")
                         .header("satoken", token)
@@ -212,7 +241,7 @@ class BillingAccountManagementTest extends AbstractApiTest {
     }
 
     private void removeAccount(String token, Long id) throws Exception {
-        TenantContext.set("DEMO", 1L);
+        TenantContext.set(TEST_ENT_CODE, null);
         try {
             this.accountMapper.deleteById(id);
         }
