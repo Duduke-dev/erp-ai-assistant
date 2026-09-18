@@ -91,10 +91,15 @@ class DatabaseToolExecutorTest {
 
         ToolQueryResult result = this.executor.execute(tool, null);
 
+        // 断言"本租户那条可见" + "其他租户那条绝不可见"，
+        // 而不是"每一行都含 -D2"——后者等于假设 product 表里只有本用例造的数据，
+        // 一旦库里存在其他真实/演示数据（V17 就插了 20 个物料）就会误报。
+        // 跨租户那条不出现，才是"无 WHERE 时确实注入了租户条件"的证据。
         assertThat(result.rows())
-                .isNotEmpty()
-                .allSatisfy(row -> assertThat(String.valueOf(row.get("product_code")))
-                        .contains("-D2"));
+                .as("无 WHERE 时应注入租户条件：本租户数据可见、其他租户数据不可见")
+                .extracting(row -> String.valueOf(row.get("product_code")))
+                .contains(this.tag + "-D2")
+                .doesNotContain(this.tag + "-O2");
     }
 
     @Test

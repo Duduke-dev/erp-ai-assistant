@@ -111,9 +111,7 @@ class AutoModeToolWiringTest {
         assertThat(names)
                 .as("模块权限齐全时，目录里声明的业务 Tool 必须全部装进请求")
                 .containsAll(ToolPermissionCatalog.declaredToolNames());
-        assertThat(names)
-                .as("图表 Tool 必须挂上，否则模型无从声明图表")
-                .contains(ToolNames.CHART_PLAN);
+        // 图表 Tool 已废弃（改为 Markdown 渲染），故此处不再断言它被挂上。
         // 注：「每个 Tool 都必须有权限来源」这条不变量由 ToolRegistryServiceTest 覆盖——
         // 那里能同时看见代码 Tool 与动态 Tool 的权限映射，比在这里反推更直接。
     }

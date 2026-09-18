@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.time.LocalDate;
 import java.util.Map;
 import java.util.Set;
 
@@ -192,7 +193,7 @@ public class AssistantService {
      */
     private ChatResponse invokeModel(ChatConversation conversation, String question,
                                      String mode, Long knowledgeBaseId, String traceId) {
-        return streamingCall(conversation, question, mode, knowledgeBaseId, traceId, true)
+        return streamingCall(conversation, question, mode, knowledgeBaseId, traceId)
                 .call()
                 .chatResponse();
     }
@@ -219,7 +220,7 @@ public class AssistantService {
         String entCode = TenantContext.getEntCode();
         Long userId = TenantContext.getUserId();
 
-        return streamingCall(conversation, question, mode, knowledgeBaseId, traceId, true)
+        return streamingCall(conversation, question, mode, knowledgeBaseId, traceId)
                 .stream()
                 .chatResponse()
                 .contextWrite(context -> context.put(
@@ -260,16 +261,15 @@ public class AssistantService {
      */
     private ChatClient.ChatClientRequestSpec streamingCall(
             ChatConversation conversation, String question,
-            String mode, Long knowledgeBaseId, String traceId,
-            boolean withChartTool) {
+            String mode, Long knowledgeBaseId, String traceId) {
         boolean knowledgeMode = MODE_KNOWLEDGE.equals(mode);
         MessageChatMemoryAdvisor memoryAdvisor = this.chatMemoryAdvisorFactory.create();
 
         ChatClient.ChatClientRequestSpec spec = this.assistantClientProvider.client()
                 .prompt()
-                .system(knowledgeMode
+                .system(withCurrentDate(knowledgeMode
                         ? this.chatProperties.getKnowledgePrompt()
-                        : this.chatProperties.getBusinessPrompt())
+                        : this.chatProperties.getBusinessPrompt()))
                 .user(question)
                 .advisors(advisor -> {
                     advisor.advisors(memoryAdvisor)
@@ -297,19 +297,33 @@ public class AssistantService {
                     conversation.getConversationId());
             return spec;
         }
-        // 图表 Tool 是系统内部工具：不查业务数据，没有「数据权限」可言，
-        // 因此不进按权限过滤的快照，而是在这里追加——谁能在 auto 模式用 Tool 就能用它。
-        // 流式暂不挂：图表事件的收口尚未接线（见 M4.2 待办），
-        // 挂了会导致「模型声明了图表却什么都没出现」的误导。
+        // 图表功能已废弃：改为「让模型直接输出 Markdown，由前端 MarkdownViewer 渲染」。
+        // 这里因此不再追加图表 Tool——模型不会声明图表方案，收口侧的 compileChart 也就永不触发。
+        //
+        // 遗留：service/chart 包（7 个类）与收口侧的图表代码尚未删除，属待清理的死代码。
         List<ToolCallback> tools = new ArrayList<>(visible);
-        if (withChartTool) {
-            tools.add(this.chartPlanToolCallback);
-        }
         // tools(Object...) 是 Spring AI 2.0 的非弃用入口（toolCallbacks(List) 自 2.0.0 起弃用待移除）。
         // 传 ToolCallback[] 与旧写法等价：DefaultChatClient 会把数组元素并入同一个 toolCallbacks 列表，
         // 因此下游 options.getToolCallbacks() 仍能取到这批 Tool。
         return spec.tools(tools.toArray(new ToolCallback[0]))
                 .toolContext(toolTraceContext(conversation, traceId, mode));
+    }
+
+    /**
+     * 在系统提示词末尾注入当前日期。
+     * <p>
+     * <b>模型不知道"今天是几号"</b>。测试实例：问「7 月、8 月、9 月的销售额对比」，
+     * 模型把工具参数填成了 {@code 2024-07-01 ~ 2024-09-30}——年份从它的训练数据里猜的。
+     * 数据库里自然查不到 2024 年的数据，于是它答「该期间无数据，请确认时间范围」：
+     * 结论看起来合理，但整个方向是错的，而且**下一次问同样的问题它可能猜对**（不稳定）。
+     * <p>
+     * 把日期告诉它，相对时间（本月 / 上月 / 近三个月）才有可靠基准。
+     * 时区显式写出来，避免模型按 UTC 推算导致跨日偏差。
+     */
+    private String withCurrentDate(String systemPrompt) {
+        return systemPrompt + "\n\n当前日期：" + LocalDate.now() + "（时区 Asia/Shanghai）。"
+                + "涉及「本月」「上月」「今天」「近 N 个月」等相对时间时，一律以此为基准推算年份与月份，"
+                + "不要凭印象假设当前是哪一年。";
     }
 
     /**

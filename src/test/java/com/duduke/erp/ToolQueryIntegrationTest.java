@@ -183,10 +183,16 @@ class ToolQueryIntegrationTest {
 
         List<Map<String, Object>> rows = this.warehouseTool.getLowStockAlerts();
 
+        // 断言"其他租户的绝不能出现" + "本租户那条可见"，而不是"每一行都以本用例的 tag 开头"——
+        // 后者等于假设库里只有本用例造的低库存数据，一旦存在演示数据（V17 就造了 5 条）必然误报。
+        // 而"跨租户那条不出现"才是这条用例真正要守的不变量。
         assertThat(rows)
                 .as("换租户的库存绝不能出现——这是最严重的缺陷类型，且不报错")
-                .isNotEmpty()
-                .allSatisfy(row -> assertThat(String.valueOf(row.get("product_code")))
+                .noneSatisfy(row -> assertThat(String.valueOf(row.get("product_code")))
+                        .startsWith(this.tag + "B"));
+        assertThat(rows)
+                .as("本租户造的那条应当可见（否则说明过滤过头了）")
+                .anySatisfy(row -> assertThat(String.valueOf(row.get("product_code")))
                         .startsWith(this.tag + "A"));
     }
 
