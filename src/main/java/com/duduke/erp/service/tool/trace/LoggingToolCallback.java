@@ -6,7 +6,6 @@ import java.util.List;
 import java.util.Map;
 
 import com.duduke.erp.entity.po.ToolCallLog;
-import com.duduke.erp.service.chart.ToolResultRecorder;
 import com.duduke.erp.tenant.TenantContext;
 
 import lombok.RequiredArgsConstructor;
@@ -64,11 +63,6 @@ public class LoggingToolCallback implements ToolCallback {
 
     private final ObjectMapper objectMapper;
 
-    /**
-     * 图表结果暂存。为 null 表示不需要为图表留存结果（见 {@link #captureForChart}）。
-     */
-    private final ToolResultRecorder resultRecorder;
-
     @Override
     public ToolDefinition getToolDefinition() {
         return this.delegate.getToolDefinition();
@@ -99,7 +93,6 @@ public class LoggingToolCallback implements ToolCallback {
             String result = this.delegate.call(toolInput, toolContext);
             record(context, traceId, toolName, toolInput, result,
                     elapsedMillis(startedAt), STATUS_SUCCESS, null);
-            captureForChart(context, traceId, toolName, result);
             return result;
         }
         catch (RuntimeException e) {
@@ -114,37 +107,8 @@ public class LoggingToolCallback implements ToolCallback {
     }
 
     /**
-     * 把本次 Tool 的结构化结果暂存给图表模块。
-     * <p>
-     * 这是「模型只输出 type + title」能成立的数据来源：模型看不到这些行，
-     * 图表由后端拿这里留存的数据编译而成。
-     * <p>
-     * <b>归属信息不全就不记</b>：{@code ToolResultRecorder} 取结果时会双重校验
-     * entCode 与 conversationId，这里提前把关，避免留下永远取不出来的死数据。
-     */
-    private void captureForChart(Map<String, Object> context, String traceId, String toolName,
-                                 String result) {
-        if (this.resultRecorder == null) {
-            return;
-        }
-        String entCode = contextValue(context, ToolTraceKeys.ENT_CODE, null);
-        if (entCode == null) {
-            entCode = TenantContext.getEntCode();
-        }
-        String conversationId = contextValue(context, ToolTraceKeys.CONVERSATION_ID, null);
-        if (entCode == null || conversationId == null) {
-            return;
-        }
-        List<Map<String, Object>> rows = parseRows(result);
-        if (rows.isEmpty()) {
-            return;
-        }
-        this.resultRecorder.record(traceId, entCode, conversationId, toolName, rows);
-    }
-
-    /**
      * 把 Tool 返回的 JSON 数组解析成行列表。
-     * 只有「数组的数组元素都是对象」才认——非结构化输出（如一句话回执）不参与画图。
+     * 只有「数组的数组元素都是对象」才认——非结构化输出（如一句话回执）视为无结果。
      */
     private List<Map<String, Object>> parseRows(String result) {
         if (result == null || result.isBlank()) {

@@ -100,15 +100,13 @@ public final class ToolNames {
     public static final String GET_OUTSOURCING_MATERIAL_FLOW = "getOutsourcingMaterialFlow";
 
     /**
-     * 系统内部 Tool：图表方案选择。
+     * 系统保留名称集合，动态 Tool 配置时一律拒绝。
      * <p>
-     * 它不面向业务查询，而是让模型只输出「图表类型 + 标题」，字段绑定与聚合全部后端生成。
-     * 动态 Tool 不得占用此名，否则模型会收到两个同名函数，行为不可预期。
+     * 目前为空：原先唯一的保留名是图表方案 Tool（{@code plan_chart_visualization}），
+     * 图表功能已废弃（改为 Markdown 渲染），该名称随之移除。保留这个集合本身，
+     * 便于将来新增系统内部 Tool 时直接登记。
      */
-    public static final String CHART_PLAN = "plan_chart_visualization";
-
-    /** 系统保留名称集合，动态 Tool 配置时一律拒绝 */
-    private static final Set<String> RESERVED = Set.of(CHART_PLAN);
+    private static final Set<String> RESERVED = Set.of();
 
     /**
      * 判断名称是否为系统保留。

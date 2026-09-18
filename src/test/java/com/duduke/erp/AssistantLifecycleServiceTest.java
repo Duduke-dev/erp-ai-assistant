@@ -168,10 +168,6 @@ class AssistantLifecycleServiceTest {
         return new AssistantLifecycleService(null, null,
                 new com.duduke.erp.config.ChatProperties(),
                 new com.duduke.erp.service.AssistantAnswerSanitizer(),
-                new com.duduke.erp.service.chart.ChartPlanToolCallback(
-                        new tools.jackson.databind.ObjectMapper()),
-                new com.duduke.erp.service.chart.ChartCompiler(),
-                new com.duduke.erp.service.chart.ToolResultRecorder(),
                 new com.duduke.erp.service.BillingService(null, null, null, null, null, null));
     }
 

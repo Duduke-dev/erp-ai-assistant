@@ -8,7 +8,7 @@ package com.duduke.erp.entity.vo;
  * <p>
  * 事件顺序（成功路径）：
  * <pre>
- * meta  →  delta × n  →  citations（可选）  →  chart（可选）  →  done
+ * meta  →  delta × n  →  citations（可选）  →  done
  * </pre>
  * 失败路径以 {@code error} 结尾；用户中断时只发已产生的 delta，不发终止事件——
  * 前端自己知道是它断的。
@@ -27,13 +27,6 @@ public enum StreamEventType {
 
     /** 引用证据，流结束时一次性下发。data 为 {@link StreamCitations} */
     CITATIONS("citations"),
-
-    /**
-     * 图表，流结束时一次性下发。data 为
-     * {@link com.duduke.erp.service.chart.ChartSpec}——
-     * 纯数据协议，前端按 type 渲染，不执行任何内容
-     */
-    CHART("chart"),
 
     /** 正常结束。data 为 {@link StreamDone} */
     DONE("done"),

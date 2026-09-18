@@ -26,9 +26,8 @@ import org.springframework.stereotype.Component;
  * （含 status 与 resultCount）。<b>「成功且结果非空」</b>才算取得业务数据：
  * 调用失败或查到 0 行都不算，这两种情况下模型手上同样没有本轮数据。
  * <p>
- * 参考实现用的是图表模块的 {@code ToolResultRecorder}（留存结构化结果用于画图）。
- * 本项目图表模块尚未建设，用 {@code ToolCallRecorder} 可达到同样的判定效果，
- * 且不需要为了守卫先建一整个模块。
+ * 参考实现是靠图表模块留存的结构化结果来判断的（{@code ToolResultRecorder}）。
+ * 本项目不依赖那套结构：用 {@code ToolCallRecorder} 可达到同样的判定效果，且不需要为了守卫先建一整个模块。
  *
  * <h3>刻意不做的事</h3>
  * <ol>

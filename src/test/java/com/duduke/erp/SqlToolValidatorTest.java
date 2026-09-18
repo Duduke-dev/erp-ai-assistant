@@ -41,13 +41,9 @@ class SqlToolValidatorTest {
                 .hasMessageContaining("Tool 名称");
     }
 
-    @Test
-    @DisplayName("动态 Tool 不得占用系统保留名（否则模型会收到两个同名函数）")
-    void rejectsReservedSystemToolName() {
-        assertThatThrownBy(() -> this.validator.validateTool(tool(ToolNames.CHART_PLAN, sql())))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("系统保留名称");
-    }
+    // 注：「动态 Tool 不得占用系统保留名」这条用例已移除——原先唯一的保留名属于图表方案 Tool，
+    // 图表功能废弃后该名称也一并删除，ToolNames.RESERVED 当前为空集，没有可构造的用例。
+    // 将来新增系统内部 Tool 时应补回此断言，否则保留名校验会变成无人覆盖的分支。
 
     @Test
     @DisplayName("描述不能为空")

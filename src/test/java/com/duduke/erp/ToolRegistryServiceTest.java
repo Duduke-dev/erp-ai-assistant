@@ -82,8 +82,9 @@ class ToolRegistryServiceTest {
                 continue;
             }
             String name = (String) field.get(null);
-            // CHART_PLAN 是系统内部 Tool，不在业务 Tool 目录里
-            if (ToolNames.CHART_PLAN.equals(name)) {
+            // 系统保留名（内部 Tool）不在业务 Tool 目录里，跳过。
+            // 用 isReserved 判断而不是写死某个常量：将来增删内部 Tool 都不用改这里。
+            if (ToolNames.isReserved(name)) {
                 continue;
             }
             assertThat(ToolPermissionCatalog.declaredToolNames())

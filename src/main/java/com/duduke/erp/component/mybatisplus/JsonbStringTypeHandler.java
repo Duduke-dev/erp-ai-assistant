@@ -16,8 +16,7 @@ import org.apache.ibatis.type.MappedTypes;
  * <p>
  * 直接使用 setString 写入 jsonb 会被驱动拒绝（类型不匹配）。这里以
  * {@code Types.OTHER} 写入，由服务端推断为 jsonb；读取时用 getString 取得原文。
- * JSON 的编解码交给上层的 Codec（如 ChartSpecCodec、RagCitationCodec），
- * 避免类型处理器与业务模型耦合。
+ * JSON 的编解码交给上层的 Codec（如 RagCitationCodec），避免类型处理器与业务模型耦合。
  */
 @MappedTypes(String.class)
 @MappedJdbcTypes(JdbcType.OTHER)

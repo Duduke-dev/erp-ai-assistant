@@ -32,7 +32,7 @@ import org.springframework.util.StringUtils;
  * <h3>三条容易做错的地方</h3>
  * <ol>
  *   <li><b>名称不得与代码 Tool 冲突</b>：{@code SqlToolValidator} 只挡系统保留名
- *       （目前只有 {@code plan_chart_visualization}），<b>不覆盖 39 个代码 Tool</b>。
+ *       （当前为空集），<b>不覆盖 39 个代码 Tool</b>。
  *       若放任重名，注册表会「保留代码 Tool、跳过动态那个」，
  *       结果是管理端显示保存成功、模型却永远看不到它——<b>不报错的哑弹</b>。
  *       所以这里在保存前显式比对 {@code ToolPermissionCatalog} 已声明的名称。</li>

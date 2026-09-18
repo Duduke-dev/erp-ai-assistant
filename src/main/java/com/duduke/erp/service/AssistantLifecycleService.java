@@ -11,12 +11,6 @@ import com.duduke.erp.entity.vo.RagCitation;
 import com.duduke.erp.entity.vo.StreamCitations;
 import com.duduke.erp.entity.vo.StreamDone;
 import com.duduke.erp.entity.vo.StreamError;
-import com.duduke.erp.service.chart.BusinessToolResult;
-import com.duduke.erp.service.chart.ChartCompiler;
-import com.duduke.erp.service.chart.ChartPlan;
-import com.duduke.erp.service.chart.ChartPlanToolCallback;
-import com.duduke.erp.service.chart.ChartSpec;
-import com.duduke.erp.service.chart.ToolResultRecorder;
 import com.duduke.erp.tenant.TenantContext;
 
 import lombok.RequiredArgsConstructor;
@@ -78,12 +72,6 @@ public class AssistantLifecycleService {
     private final ChatProperties chatProperties;
 
     private final AssistantAnswerSanitizer answerSanitizer;
-
-    private final ChartPlanToolCallback chartPlanToolCallback;
-
-    private final ChartCompiler chartCompiler;
-
-    private final ToolResultRecorder toolResultRecorder;
 
     private final BillingService billingService;
 
@@ -167,7 +155,6 @@ public class AssistantLifecycleService {
      *
      * @param delta      需要补发的增量（已下发过的部分不重复发）
      * @param citations  引用事件，无引用时为 null
-     * @param chart      图表，本轮未成图时为 null
      * @param done       结束事件
      * @param error      错误事件，成功时为 null
      * @param handoff    是否已由本次调用完成收口（false 表示被其它路径抢先，调用方应静默结束）
@@ -175,43 +162,15 @@ public class AssistantLifecycleService {
     public record StreamOutcome(
             String delta,
             StreamCitations citations,
-            ChartSpec chart,
             StreamDone done,
             StreamError error,
             boolean handoff) {
 
         /** 被其它终止路径抢先收口时的空结果 */
         static StreamOutcome swallowed() {
-            return new StreamOutcome(null, null, null, null, null, false);
+            return new StreamOutcome(null, null, null, null, false);
         }
 
-    }
-
-    /**
-     * 编译本轮图表：模型登记的「类型 + 标题」与本轮暂存的业务结果在这里汇合。
-     * <p>
-     * 任一缺失都返回 {@code null}（不画无意义的图）：模型没声明方案，
-     * 或本轮 Tool 结果为空、或数据无法绑定出数值列。
-     */
-    private ChartSpec compileChart(StreamState state, ChatConversation conversation) {
-        ChartPlan plan = this.chartPlanToolCallback.planOf(state.traceId());
-        if (plan == null) {
-            return null;
-        }
-        List<BusinessToolResult> results = this.toolResultRecorder.getResults(
-                state.traceId(), conversation.getEntCode(), conversation.getConversationId());
-        return this.chartCompiler.compile(plan, results);
-    }
-
-    /**
-     * 清理本轮图表暂存。
-     * <p>
-     * 与 {@link #compileChart} 成对调用（读完即清），使清理不依赖
-     * {@code doFinally} 与收口的先后——顺序一旦相反会造成图表恒为 null 且不报错。
-     */
-    private void clearChartState(StreamState state) {
-        this.chartPlanToolCallback.clear(state.traceId());
-        this.toolResultRecorder.clear(state.traceId());
     }
 
     /**
@@ -366,12 +325,6 @@ public class AssistantLifecycleService {
             String citationsJson = encodeQuietly(citations);
             int ragDocCount = usable ? state.recalled().size() : 0;
 
-            // 图表：读本轮方案 + 业务结果编译，**读完立即清理**。
-            // 清理与消费放在同一处，就不依赖 doFinally 与收口的先后——
-            // 若依赖那个顺序，顺序一旦相反图表会恒为 null，且不报错。
-            ChartSpec chart = usable ? compileChart(state, conversation) : null;
-            clearChartState(state);
-
             ChatMessage saved = this.chatHistoryService.saveAssistantMessage(
                     conversation, answer, mode,
                     promptTokens, completionTokens, promptTokens + completionTokens, elapsedMs,
@@ -387,7 +340,7 @@ public class AssistantLifecycleService {
                     promptTokens + completionTokens);
 
             if (STATUS_FAILED.equals(status)) {
-                return new StreamOutcome(null, null, null, null,
+                return new StreamOutcome(null, null, null,
                         new StreamError("STREAM_ERROR", "回答生成失败，请稍后重试"), true);
             }
 
@@ -395,13 +348,13 @@ public class AssistantLifecycleService {
                     ? null
                     : new StreamCitations(resolveKnowledgeBaseId(state), ragDocCount, citations);
 
-            return new StreamOutcome(null, citationEvent, chart, done, null, true);
+            return new StreamOutcome(null, citationEvent, done, null, true);
         }
         catch (RuntimeException e) {
             // 落库本身失败（如数据库不可用）：这已经是最外层，不能再抛，
             // 否则 SSE 连接会以未处理异常收场。降级为 error 事件。
             log.error("流式收口落库失败：conversationId={}", conversation.getConversationId(), e);
-            return new StreamOutcome(null, null, null, null,
+            return new StreamOutcome(null, null, null,
                     new StreamError("PERSIST_ERROR", "回答已生成但保存失败，请重试"), true);
         }
         finally {

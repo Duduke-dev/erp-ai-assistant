@@ -198,11 +198,6 @@ public class ChatController {
                         .name(StreamEventType.CITATIONS.eventName())
                         .data(outcome.citations()));
             }
-            if (outcome.chart() != null) {
-                emitter.send(SseEmitter.event()
-                        .name(StreamEventType.CHART.eventName())
-                        .data(outcome.chart()));
-            }
             if (outcome.done() != null) {
                 emitter.send(SseEmitter.event()
                         .name(StreamEventType.DONE.eventName())

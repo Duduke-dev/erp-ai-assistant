@@ -21,12 +21,6 @@ import com.duduke.erp.entity.vo.AskVO;
 import com.duduke.erp.entity.vo.ChatMessageVO;
 import com.duduke.erp.entity.vo.ConversationVO;
 import com.duduke.erp.entity.vo.RagCitation;
-import com.duduke.erp.service.chart.BusinessToolResult;
-import com.duduke.erp.service.chart.ChartCompiler;
-import com.duduke.erp.service.chart.ChartPlan;
-import com.duduke.erp.service.chart.ChartPlanToolCallback;
-import com.duduke.erp.service.chart.ChartSpec;
-import com.duduke.erp.service.chart.ToolResultRecorder;
 import com.duduke.erp.service.tool.ToolRegistryService;
 import com.duduke.erp.service.tool.trace.ToolCallRecorder;
 import com.duduke.erp.service.tool.trace.ToolTraceKeys;
@@ -122,13 +116,6 @@ public class AssistantService {
 
     private final AssistantAnswerSanitizer answerSanitizer;
 
-    /** 图表方案 Tool（系统内部工具，不查业务数据） */
-    private final ChartPlanToolCallback chartPlanToolCallback;
-
-    private final ChartCompiler chartCompiler;
-
-    private final ToolResultRecorder toolResultRecorder;
-
     private final BillingService billingService;
 
     /**
@@ -178,9 +165,6 @@ public class AssistantService {
             // 线程复用，必须清理，否则下一次请求会读到本轮证据导致引用串档
             RagContextFormatter.clearRecalledDocuments();
             this.toolCallRecorder.clearTrace(traceId);
-            // 图表暂存同样是请求作用域的：不清理会让下一轮读到本轮的数据（串档）
-            this.chartPlanToolCallback.clear(traceId);
-            this.toolResultRecorder.clear(traceId);
         }
     }
 
@@ -465,9 +449,6 @@ public class AssistantService {
         this.billingService.recordConsumption(conversation.getModelId(),
                 promptTokens, completionTokens, totalTokens);
 
-        // 图表必须在清理暂存之前编译：清理发生在 ask() 的 finally 里
-        ChartSpec chart = compileChart(conversation, traceId);
-
         return new AskVO(
                 conversation.getConversationId(),
                 saved.getId(),
@@ -475,31 +456,10 @@ public class AssistantService {
                 mode,
                 citations,
                 recalled.size(),
-                chart,
                 promptTokens,
                 completionTokens,
                 totalTokens,
                 elapsedMs);
-    }
-
-    /**
-     * 编译本轮图表。
-     * <p>
-     * 模型登记的只是「类型 + 标题」，真正的数据来自 {@code ToolResultRecorder}
-     * 暂存的本轮 Tool 结果——两者在这里汇合。
-     * 模型没登记方案、或数据无法成图时返回 {@code null}（不画无意义的图）。
-     * <p>
-     * <b>必须在清理暂存之前调用</b>：清理发生在 {@code ask()} 的 finally 里，
-     * 顺序反了就永远拿不到数据，且不会报错。
-     */
-    private ChartSpec compileChart(ChatConversation conversation, String traceId) {
-        ChartPlan plan = this.chartPlanToolCallback.planOf(traceId);
-        if (plan == null) {
-            return null;
-        }
-        List<BusinessToolResult> results = this.toolResultRecorder.getResults(
-                traceId, conversation.getEntCode(), conversation.getConversationId());
-        return this.chartCompiler.compile(plan, results);
     }
 
     /**

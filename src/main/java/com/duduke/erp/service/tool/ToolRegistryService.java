@@ -10,7 +10,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import com.duduke.erp.entity.po.LlmTool;
 import com.duduke.erp.mapper.LlmToolMapper;
-import com.duduke.erp.service.chart.ToolResultRecorder;
 import com.duduke.erp.service.tool.dynamic.DatabaseToolCallbackFactory;
 import com.duduke.erp.service.tool.dynamic.SqlToolValidator;
 import com.duduke.erp.service.tool.trace.LoggingToolCallback;
@@ -66,9 +65,6 @@ public class ToolRegistryService {
     private final ToolCallRecorder recorder;
 
     private final ToolCallLogService logService;
-
-    /** 图表结果暂存：让每个业务 Tool 的结构化结果可被图表模块复用 */
-    private final ToolResultRecorder resultRecorder;
 
     private final ObjectMapper objectMapper;
 
@@ -184,7 +180,7 @@ public class ToolRegistryService {
      */
     private ToolCallback wrap(ToolCallback callback, String toolSource) {
         return new LoggingToolCallback(callback, toolSource, this.recorder, this.logService,
-                this.objectMapper, this.resultRecorder);
+                this.objectMapper);
     }
 
 }
