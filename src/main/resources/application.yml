@@ -167,7 +167,12 @@ app:
     max-num-chunks: 20000
 
     max-extracted-chars: 5000000
-    vector-write-batch-size: 100
+    # 批量写入向量库的批大小。
+    # ⚠️ 这不是性能参数，而是**由 embedding provider 的批量上限决定**：
+    #   DashScope 单次最多 10 条文本，超出直接 400
+    #   （InvalidParameter: batch size is invalid, it should not be larger than 10）；
+    #   OpenAI 可到 2048。**换 provider 必须同步改这个值。**
+    vector-write-batch-size: 10
 
 # Sa-Token 配置
 sa-token:

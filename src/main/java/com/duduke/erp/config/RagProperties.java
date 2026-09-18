@@ -61,7 +61,19 @@ public class RagProperties {
     /** 单文档最大分块数，防止异常文档产生海量向量 */
     private int maxNumChunks = 20_000;
 
-    /** 批量写入向量库的批大小 */
-    private int vectorWriteBatchSize = 100;
+    /**
+     * 批量写入向量库的批大小。
+     * <p>
+     * <b>它不是性能调优参数，而是由 embedding provider 的批量上限决定</b>：
+     * DashScope 单次最多 10 条文本，超出直接 400
+     * （{@code InvalidParameter: batch size is invalid, it should not be larger than 10}）；
+     * OpenAI 可到 2048。**换 provider 必须同步调整。**
+     * <p>
+     * 也不能指望下游再分一次：Spring AI 内置的批处理策略按 <b>token 数</b>切分，
+     * 而这里的限制是 <b>条数</b>——两个维度不同，按 token 分批不能保证条数合规。
+     * 之前配成 100 一直没暴露，只是因为评测用的文档都很小（分片数不足 10），
+     * 属于侥幸，不是正确。
+     */
+    private int vectorWriteBatchSize = 10;
 
 }
