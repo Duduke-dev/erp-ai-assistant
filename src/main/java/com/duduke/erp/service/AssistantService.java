@@ -236,9 +236,21 @@ public class AssistantService {
     }
 
     /**
-     * 统一的调用装配：系统提示词 + 用户提问 + 记忆 Advisor +（可选）RAG Advisor +（auto）业务 Tool。
+     * 统一的调用装配：系统提示词 + 用户提问 + 记忆 Advisor +（可选）RAG Advisor +（可选）业务 Tool。
      * <p>
-     * <b>Tool 只挂 auto 模式</b>：knowledge 是纯知识库问答，不该让模型去查业务数据。
+     * <b>三种模式的装配差异</b>：
+     * <ul>
+     *   <li><b>auto</b>：业务 Tool <b>+ RAG 都挂</b>——这是本项目的「全能模式」，
+     *       结构化业务数据与非结构化的制度文档都能回答，模型自己决定用哪种；</li>
+     *   <li><b>data</b>：只挂业务 Tool，<b>刻意不挂 RAG</b>——它承诺「只用业务数据」，
+     *       挂上资料库与这个承诺冲突；</li>
+     *   <li><b>knowledge</b>：只挂 RAG、不挂 Tool——凭资料回答，不碰业务库。</li>
+     * </ul>
+     * <p>
+     * Tool 与 RAG 同时挂载时<b>不冲突</b>：模型可以先用 Tool 取数、再引用资料佐证，
+     * 也可以只走其中一条。两者的召回范围互不相干（Tool 查业务表，RAG 查向量库）。
+     * <p>
+     * <b>Tool 只挂 auto / data 模式</b>：knowledge 是纯知识库问答，不该让模型去查业务数据。
      * <p>
      * Tool 用<b>按请求</b>的方式传入而非构建期绑定——Spring AI 2.0 的
      * {@code ChatClientRequestSpec} 支持 {@code toolCallbacks(List)}，
@@ -262,11 +274,14 @@ public class AssistantService {
                 .advisors(advisor -> {
                     advisor.advisors(memoryAdvisor)
                             .param(ChatMemory.CONVERSATION_ID, conversation.getConversationId());
-                    if (knowledgeMode) {
-                        // knowledge 模式必须挂 RAG，检索不到就如实说明资料不足。
+                    // auto 与 knowledge 都挂 RAG，差别在召回参数（见 prepareAdvisor 的 knowledgeMode 入参）：
+                    //   knowledge 用更宽的召回（资料是唯一依据，宁多勿漏）；
+                    //   auto 用更严的阈值（资料只是辅助手段，塞进弱相关的段落反而干扰业务数据作答）。
+                    // data 刻意不挂：它承诺「只用业务数据」，挂上资料即与承诺冲突。
+                    if (knowledgeMode || MODE_AUTO.equals(mode)) {
                         // 一并带出历史提问：检索前改写要靠它补全省略式追问（「那上个月呢」）。
                         advisor.advisors(this.ragAnswerService.prepareAdvisor(
-                                knowledgeBaseId, true,
+                                knowledgeBaseId, knowledgeMode,
                                 previousUserQuestions(conversation, question)));
                     }
                 });
