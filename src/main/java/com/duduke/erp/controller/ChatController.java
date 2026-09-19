@@ -338,7 +338,13 @@ public class ChatController {
      * </ol>
      * 正常场景下工具调用发生得很早（实测 4~308ms），用户几乎感觉不到缓冲。
      */
-    private static final class DeltaGate {
+    /*
+     * 本类刻意声明为 public static：它是**阻断型防线**，一旦行为出错会导致
+     * 「正常回答被吞掉」，比漏报更严重，因此必须能脱离 SSE 环境被单测覆盖。
+     * 不要为了「不暴露 API」把它改回 private —— 那样就只能靠端到端测试，
+     * 而端到端无法稳定构造「模型不调工具」的场景。
+     */
+    public static final class DeltaGate {
 
         /** 是否需要门控（问题被判定为要业务数据才为 true） */
         private final boolean enabled;
@@ -349,22 +355,22 @@ public class ChatController {
         /** 是否已放行（一旦放行就不再缓冲） */
         private boolean released;
 
-        DeltaGate(boolean enabled) {
+        public DeltaGate(boolean enabled) {
             this.enabled = enabled;
             this.released = !enabled;
         }
 
         /** true 表示本次增量应暂存而非下发 */
-        synchronized boolean shouldBuffer() {
+        public synchronized boolean shouldBuffer() {
             return this.enabled && !this.released;
         }
 
-        synchronized void buffer(String text) {
+        public synchronized void buffer(String text) {
             this.buffered.add(text);
         }
 
         /** 放行并返回需要补发的内容 */
-        synchronized java.util.List<String> release() {
+        public synchronized java.util.List<String> release() {
             this.released = true;
             java.util.List<String> pending = java.util.List.copyOf(this.buffered);
             this.buffered.clear();
@@ -372,12 +378,12 @@ public class ChatController {
         }
 
         /** 是否已放行；未放行即「本轮没有任何业务数据」 */
-        synchronized boolean isReleased() {
+        public synchronized boolean isReleased() {
             return this.released;
         }
 
         /** 丢弃暂存内容，返回被丢弃的增量条数（供日志核对拦截是否合理） */
-        synchronized int discard() {
+        public synchronized int discard() {
             int dropped = this.buffered.size();
             this.buffered.clear();
             this.released = true;
