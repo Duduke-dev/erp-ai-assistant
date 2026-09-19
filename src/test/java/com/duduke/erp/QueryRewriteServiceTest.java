@@ -18,7 +18,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class QueryRewriteServiceTest {
 
-    private final QueryRewriteService service = new QueryRewriteService();
+    // clientProvider 传 null：本用例只覆盖规则式路径（RagProperties 默认 rewrite-mode=rule），
+    // 模型润色那条分支靠集成验证，不在这里调真实 API
+    private final QueryRewriteService service =
+            new QueryRewriteService(null, new com.duduke.erp.config.RagProperties());
 
     @Test
     @DisplayName("以连接词开头的短追问，拼上上一轮主语")

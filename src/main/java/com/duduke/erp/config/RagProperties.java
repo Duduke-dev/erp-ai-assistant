@@ -26,6 +26,19 @@ public class RagProperties {
     /** knowledge 模式的相似度阈值 */
     private double knowledgeSimilarityThreshold = 0.25;
 
+    /**
+     * 检索查询改写的实现方式。
+     * <p>
+     * {@code rule}：只用规则式（补全省略式追问「那上个月呢」），确定、零成本、不引入新失败点；
+     * {@code model}：在规则式补全之后再用模型润色，让口语化问题（「上次那个料还够不够」）
+     * 更贴近知识库语料的表述，提升召回。
+     * <p>
+     * <b>默认 rule</b>：模型式会多一次 LLM 调用（延迟 + token），
+     * 而且改写幅度一旦过大，检索会偏离用户原意且**看起来完全正常、极难发现**——
+     * 需要对照实验（同为 rule / model，比 Recall@5 与 MRR@5）确认收益后再切换。
+     */
+    private String rewriteMode = "rule";
+
     /** 过采样倍数：先取 topK × factor，再做资格过滤与去重分散 */
     private int oversampleFactor = 3;
 
