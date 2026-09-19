@@ -26,6 +26,14 @@ public final class ToolTraceKeys {
 
     public static final String MODEL = "model";
 
+    /**
+     * 本轮生效的知识库 ID，供知识检索 Tool 使用。
+     * <p>
+     * 工具方法的签名里只有业务参数（查询词、条数），拿不到请求体的知识库选择，
+     * 所以经 ToolContext 带进来；缺失时检索侧会回落到默认库。
+     */
+    public static final String KNOWLEDGE_BASE_ID = "knowledgeBaseId";
+
     private ToolTraceKeys() {
     }
 

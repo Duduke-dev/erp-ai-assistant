@@ -100,6 +100,15 @@ public final class ToolNames {
     public static final String GET_OUTSOURCING_MATERIAL_FLOW = "getOutsourcingMaterialFlow";
 
     /**
+     * 知识库检索工具。
+     * <p>
+     * 与那 39 个业务 Tool 的本质区别：它查的是<b>向量库</b>（企业文档），不是业务数据表。
+     * 由 auto 模式挂载，<b>让模型自己决定</b>「这个问题要不要查资料」——
+     * 取代原先「只要挂了 Advisor 就每轮强制检索」的做法。
+     */
+    public static final String SEARCH_KNOWLEDGE_BASE = "search_knowledge_base";
+
+    /**
      * 系统保留名称集合，动态 Tool 配置时一律拒绝。
      * <p>
      * 目前为空：原先唯一的保留名是图表方案 Tool（{@code plan_chart_visualization}），

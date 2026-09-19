@@ -258,14 +258,20 @@ public class AssistantService {
                 .advisors(advisor -> {
                     advisor.advisors(memoryAdvisor)
                             .param(ChatMemory.CONVERSATION_ID, conversation.getConversationId());
-                    // auto 与 knowledge 都挂 RAG，差别在召回参数（见 prepareAdvisor 的 knowledgeMode 入参）：
-                    //   knowledge 用更宽的召回（资料是唯一依据，宁多勿漏）；
-                    //   auto 用更严的阈值（资料只是辅助手段，塞进弱相关的段落反而干扰业务数据作答）。
-                    // data 刻意不挂：它承诺「只用业务数据」，挂上资料即与承诺冲突。
-                    if (knowledgeMode || MODE_AUTO.equals(mode)) {
-                        // 一并带出历史提问：检索前改写要靠它补全省略式追问（「那上个月呢」）。
+                    // 只有 knowledge 模式挂 RAG Advisor —— 它承诺「以资料为唯一依据」，
+                    // 必须强制检索才有意义。
+                    //
+                    // auto 模式改为挂 search_knowledge_base Tool，**由模型自己决定要不要查资料**：
+                    // 原先 Advisor 式是「挂了就每轮强制检索」，带来三个问题——
+                    // 闲聊也触发嵌入调用；无条件往 prompt 塞段落，弱相关时反而干扰模型使用
+                    // 工具结果（2026-09-19 实际发生过）；且只能检索一次。
+                    //
+                    // data 依旧不挂：它承诺「只用业务数据」，挂资料或知识工具都与承诺冲突。
+                    //
+                    // 一并带出历史提问：检索前改写要靠它补全省略式追问（「那上个月呢」）。
+                    if (knowledgeMode) {
                         advisor.advisors(this.ragAnswerService.prepareAdvisor(
-                                knowledgeBaseId, knowledgeMode,
+                                knowledgeBaseId, true,
                                 previousUserQuestions(conversation, question)));
                     }
                 });
@@ -302,7 +308,7 @@ public class AssistantService {
         // 传 ToolCallback[] 与旧写法等价：DefaultChatClient 会把数组元素并入同一个 toolCallbacks 列表，
         // 因此下游 options.getToolCallbacks() 仍能取到这批 Tool。
         return spec.tools(tools.toArray(new ToolCallback[0]))
-                .toolContext(toolTraceContext(conversation, traceId, mode));
+                .toolContext(toolTraceContext(conversation, traceId, mode, knowledgeBaseId));
     }
 
     /**
@@ -361,9 +367,11 @@ public class AssistantService {
      * 缺一个字段只是流水里少一列的排查信息，不该让整轮问答失败。
      */
     private Map<String, Object> toolTraceContext(ChatConversation conversation, String traceId,
-                                                 String mode) {
+                                                 String mode, Long knowledgeBaseId) {
         Map<String, Object> context = new HashMap<>();
         context.put(ToolTraceKeys.TRACE_ID, traceId);
+        // 知识检索 Tool 靠它知道该查哪个库；请求没指定时为空，检索侧回落到默认库
+        putIfPresent(context, ToolTraceKeys.KNOWLEDGE_BASE_ID, knowledgeBaseId);
         context.put(ToolTraceKeys.CONVERSATION_ID, conversation.getConversationId());
         // 必须记真实模式：早先这里硬编码 auto，会让 data 模式的调用流水也记成 auto，
         // 排查「这个 Tool 是在哪种模式下被调的」时直接拿到错误答案

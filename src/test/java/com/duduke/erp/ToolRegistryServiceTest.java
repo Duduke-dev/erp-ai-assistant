@@ -64,14 +64,15 @@ class ToolRegistryServiceTest {
     }
 
     @Test
-    @DisplayName("启动后快照里含全部 39 个代码 Tool")
+    @DisplayName("启动后快照里含全部 40 个代码 Tool")
     void registersAllCodeTools() {
         ToolSnapshot snapshot = this.registry.snapshot();
 
         assertThat(snapshot.version()).isPositive();
         assertThat(codeToolCount(snapshot))
-                .as("代码 Tool 数量固定为 39；动态 Tool 另算，不参与这个断言")
-                .isEqualTo(39);
+                .as("代码 Tool 数量固定为 40（39 个业务 Tool + 知识库检索 Tool）；"
+                        + "动态 Tool 另算，不参与这个断言")
+                .isEqualTo(40);
     }
 
     @Test
@@ -124,7 +125,7 @@ class ToolRegistryServiceTest {
         ToolSnapshot snapshot = this.registry.snapshot();
         // 断言"我这个进了快照"，而不是快照总数——总数里还包含别人建的真实配置
         assertThat(snapshot.requiredPermissions()).containsEntry(name, ToolPermissionCatalog.DYNAMIC);
-        assertThat(codeToolCount(snapshot)).isEqualTo(39);
+        assertThat(codeToolCount(snapshot)).isEqualTo(40);
 
         // 动态 Tool 不随模块权限放开
         assertThat(namesOf(snapshot.visibleTo(Set.of(ToolPermissionCatalog.SALES)))).doesNotContain(name);
@@ -140,7 +141,7 @@ class ToolRegistryServiceTest {
 
         ToolSnapshot snapshot = this.registry.snapshot();
 
-        assertThat(codeToolCount(snapshot)).isEqualTo(39);
+        assertThat(codeToolCount(snapshot)).isEqualTo(40);
         assertThat(snapshot.requiredPermissions())
                 .as("重名时保留代码 Tool 的权限映射，不能被动态 Tool 顶掉")
                 .containsEntry(name, ToolPermissionCatalog.SALES);
@@ -160,7 +161,7 @@ class ToolRegistryServiceTest {
         assertThat(this.registry.snapshot().requiredPermissions())
                 .as("配置非法的动态 Tool 不应进入快照")
                 .doesNotContainKey(name);
-        assertThat(codeToolCount(this.registry.snapshot())).isEqualTo(39);
+        assertThat(codeToolCount(this.registry.snapshot())).isEqualTo(40);
     }
 
     @Test
@@ -186,7 +187,7 @@ class ToolRegistryServiceTest {
 
         assertThat(after.version()).isGreaterThan(before.version());
         // 旧快照仍可正常使用——这正是不可变快照的价值
-        assertThat(codeToolCount(before)).isEqualTo(39);
+        assertThat(codeToolCount(before)).isEqualTo(40);
         assertThat(before.visibleTo(Set.of(ToolPermissionCatalog.SALES))).hasSize(6);
     }
 

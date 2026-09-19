@@ -42,6 +42,14 @@ public final class ToolPermissionCatalog {
      */
     public static final String DYNAMIC = "tool:dynamic:query";
 
+    /**
+     * 知识库检索工具的权限码。
+     * <p>
+     * 与 {@code knowledge:manage}（知识库的增删改）分开：后者是运维知识库本身的权力，
+     * 这个是「在对话里检索资料」的权力——能提问的人大多应该能用，但不该顺带获得管理权限。
+     */
+    public static final String KNOWLEDGE = "tool:knowledge:query";
+
     /** Tool 名 → 所需权限码 */
     private static final Map<String, String> BY_TOOL_NAME = build();
 
@@ -89,6 +97,8 @@ public final class ToolPermissionCatalog {
         register(map, OUTSOURCING,
                 ToolNames.GET_OUTSOURCING_ORDERS, ToolNames.GET_OUTSOURCING_ORDER_DETAIL,
                 ToolNames.GET_RECENT_OUTSOURCING_ORDERS, ToolNames.GET_OUTSOURCING_MATERIAL_FLOW);
+        // 知识库检索：不属于任何一个业务模块，单独一个权限码
+        register(map, KNOWLEDGE, ToolNames.SEARCH_KNOWLEDGE_BASE);
         return Map.copyOf(map);
     }
 
