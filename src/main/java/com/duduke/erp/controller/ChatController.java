@@ -67,6 +67,16 @@ public class ChatController {
      */
     private static final Pattern CITATION_PATTERN = Pattern.compile("\\[\\d{1,3}]");
 
+    /**
+     * 首轮缓冲拦截时，代替模型原文下发给用户的文本。
+     * <p>
+     * 措辞要说明「为什么没有答案」并给出下一步，而不是一句冷冰冰的拒绝——
+     * 用户此时并不知道自己触发了哪条规则。
+     */
+    private static final String DATA_MISSING_REPLY =
+            "本轮没有查到可用的业务数据。为避免给出没有依据的数字，这里不提供推测性回答——"
+                    + "请确认查询范围（时间区间、仓库、产品等），或换一种问法再试。";
+
     private final AssistantService assistantService;
 
     private final AssistantLifecycleService assistantLifecycleService;
@@ -148,6 +158,9 @@ public class ChatController {
         var state = this.assistantLifecycleService.newState(preparation.traceId());
         var finalized = new AtomicBoolean(false);
         long startedAt = System.currentTimeMillis();
+        // 只有「要业务数据」的问题才启用首轮缓冲门控；其余场景完全直通，不加任何延迟
+        var gate = new DeltaGate(this.businessDataTurnGuard.requiresCurrentBusinessData(
+                preparation.mode(), preparation.question()));
 
         // 上游订阅句柄。用 AtomicReference 承载：onCompletion 在正常完成时也会触发，
         // 那时 subscription 早已存在，但闭包捕获的是赋值前的引用，直接用局部变量会拿到 null。
@@ -173,27 +186,43 @@ public class ChatController {
                         conversation, preparation.question(), preparation.mode(),
                         preparation.knowledgeBaseId(), preparation.traceId())
                 .subscribe(
-                        response -> handleDelta(emitter, state, response),
+                        response -> handleDelta(emitter, state, response, gate, preparation),
                         error -> finishWithError(emitter, state, preparation, startedAt, finalized, error),
-                        () -> finishNormally(emitter, state, preparation, startedAt, finalized));
+                        () -> finishNormally(emitter, state, preparation, startedAt, finalized, gate));
         subscriptionRef.set(subscription);
     }
 
-    /** 单帧处理：只转发文本增量，空帧跳过 */
+    /** 单帧处理：门控放行后转发文本增量，空帧跳过 */
     private void handleDelta(SseEmitter emitter, AssistantLifecycleService.StreamState state,
-                             ChatResponse response) {
+                             ChatResponse response, DeltaGate gate,
+                             AssistantService.StreamPreparation preparation) {
         String text = this.assistantLifecycleService.onDelta(state, response);
         if (text == null) {
             return;
         }
+        if (gate.shouldBuffer()) {
+            // 还没放行：检查本轮是否已经拿到非空工具结果（内存查询，微秒级，可每帧做）
+            if (this.businessDataTurnGuard.hasBusinessResult(preparation.traceId())) {
+                for (String pending : gate.release()) {
+                    sendDelta(emitter, pending);
+                }
+            }
+            else {
+                gate.buffer(text);
+                return;
+            }
+        }
+        sendDelta(emitter, text);
+    }
+
+    /** 发送单个增量。失败通常意味着客户端已断开，不在此处收口，交给 onError 统一处理 */
+    private void sendDelta(SseEmitter emitter, String text) {
         try {
             emitter.send(SseEmitter.event()
                     .name(StreamEventType.DELTA.eventName())
                     .data(new StreamDelta(text)));
         }
         catch (Exception e) {
-            // 发送失败通常意味着客户端已断开。不在这里收口，
-            // 让 onError 回调统一处理，避免两条路径并发收口。
             log.debug("SSE 增量发送失败：{}", e.getMessage());
         }
     }
@@ -201,26 +230,39 @@ public class ChatController {
     /** 正常结束：下发引用（若有）与 done */
     private void finishNormally(SseEmitter emitter, AssistantLifecycleService.StreamState state,
                                 AssistantService.StreamPreparation preparation,
-                                long startedAt, AtomicBoolean finalized) {
+                                long startedAt, AtomicBoolean finalized, DeltaGate gate) {
+        // 门控始终未放行 → 本轮全程没有拿到任何可用的业务数据，模型是在凭印象作答。
+        // 丢弃已暂存的内容，改发说明文本；**落库也用同一段文本**（传 answerOverride），
+        // 否则界面显示「没查到」、库里存着编造内容，两者对不上。
+        String answerOverride = null;
+        if (!gate.isReleased()) {
+            int dropped = gate.discard();
+            log.warn("流式回答因缺少本轮业务数据被拦截：conversationId={}, 丢弃增量={}",
+                    preparation.conversation().getConversationId(), dropped);
+            answerOverride = DATA_MISSING_REPLY;
+        }
         var outcome = this.assistantLifecycleService.onComplete(
-                state, preparation.conversation(), preparation.mode(), startedAt, finalized, 0, 0);
+                state, preparation.conversation(), preparation.mode(), startedAt, finalized,
+                answerOverride, 0, 0);
         if (!outcome.handoff()) {
             return;
         }
         try {
+            // 被拦截时把说明补发出去——用户原本会看到的正文已经被丢弃了
+            if (answerOverride != null) {
+                sendDelta(emitter, answerOverride);
+            }
             if (outcome.citations() != null) {
                 emitter.send(SseEmitter.event()
                         .name(StreamEventType.CITATIONS.eventName())
                         .data(outcome.citations()));
             }
-            // 数据缺失提示：问题是「要业务数据」的类型，但本轮没有任何非空 Tool 结果。
+            // 数据缺失提示：本轮没有任何非空 Tool 结果。
             //
-            // 为什么只提示、不拦截：流式路径没有数据门控（BusinessDataTurnGuard 类注释里
-            // 「刻意不做流式门控」），模型完全可能不调工具、直接凭训练数据编出一份格式漂亮的表格。
-            // 真正拦住它要改 SSE 管线（暂存首轮分片、确认有数据才放行），属独立变更；
-            // 在做到那一步之前，至少要**让用户知道这轮没查到数据**，而不是默默相信那些数字。
-            if (this.businessDataTurnGuard.requiresCurrentBusinessData(
-                    preparation.mode(), preparation.question())
+            // 门控启用时的这种情况已被 DeltaGate 拦下（正文被替换为说明文本，answerOverride != null），
+            // 此处不重复提示；真正需要它的是**未启用门控**却仍没查到数据的场景——
+            // 例如问题不含数据意图词、没被判定为「要业务数据」，但模型自己决定查一下却没查到。
+            if (answerOverride == null
                     && !this.businessDataTurnGuard.hasBusinessResult(preparation.traceId())) {
                 emitter.send(SseEmitter.event()
                         .name(StreamEventType.WARNING.eventName())
@@ -275,6 +317,73 @@ public class ChatController {
             log.debug("SSE 错误事件发送失败：{}", e.getMessage());
         }
         emitter.complete();
+    }
+
+    /**
+     * 首轮缓冲门控：把「模型不查数据就编数字」这件事从源头挡住。
+     *
+     * <h3>为什么需要它</h3>
+     * 流式路径原先没有任何数据门控（{@code BusinessDataTurnGuard} 的类注释写着
+     * 「刻意不做流式门控」），而 {@code tool_choice=required} 那条路实测会让模型
+     * 陷入工具调用循环，不可用。于是模型完全可以跳过查询、直接编出一份格式漂亮的表格，
+     * 而 2026-09-19 确实发生过（编出 68 个客户，而客户表总共只有 8 个）。
+     *
+     * <h3>工作方式</h3>
+     * 只有当问题被判定为「要业务数据」时才启用（别的场景完全直通，不增加任何延迟）：
+     * <ol>
+     *   <li>增量先暂存**不下发**；</li>
+     *   <li>一旦本轮出现「成功且非空」的工具结果 → 立即放行，补发暂存并转为实时下发；</li>
+     *   <li>流结束仍未放行 → 说明模型全程没查数据 → **丢弃暂存**，改发
+     *       {@link #DATA_MISSING_REPLY}。</li>
+     * </ol>
+     * 正常场景下工具调用发生得很早（实测 4~308ms），用户几乎感觉不到缓冲。
+     */
+    private static final class DeltaGate {
+
+        /** 是否需要门控（问题被判定为要业务数据才为 true） */
+        private final boolean enabled;
+
+        /** 已暂存但尚未下发的增量 */
+        private final java.util.List<String> buffered = new java.util.ArrayList<>();
+
+        /** 是否已放行（一旦放行就不再缓冲） */
+        private boolean released;
+
+        DeltaGate(boolean enabled) {
+            this.enabled = enabled;
+            this.released = !enabled;
+        }
+
+        /** true 表示本次增量应暂存而非下发 */
+        synchronized boolean shouldBuffer() {
+            return this.enabled && !this.released;
+        }
+
+        synchronized void buffer(String text) {
+            this.buffered.add(text);
+        }
+
+        /** 放行并返回需要补发的内容 */
+        synchronized java.util.List<String> release() {
+            this.released = true;
+            java.util.List<String> pending = java.util.List.copyOf(this.buffered);
+            this.buffered.clear();
+            return pending;
+        }
+
+        /** 是否已放行；未放行即「本轮没有任何业务数据」 */
+        synchronized boolean isReleased() {
+            return this.released;
+        }
+
+        /** 丢弃暂存内容，返回被丢弃的增量条数（供日志核对拦截是否合理） */
+        synchronized int discard() {
+            int dropped = this.buffered.size();
+            this.buffered.clear();
+            this.released = true;
+            return dropped;
+        }
+
     }
 
     /** 取消上游订阅并收口为 cancelled */

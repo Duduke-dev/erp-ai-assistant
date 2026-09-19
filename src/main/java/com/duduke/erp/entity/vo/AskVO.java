@@ -10,7 +10,9 @@ import java.util.List;
  * @param answer          回答正文（Markdown，由前端 MarkdownViewer 渲染）
  * @param mode            实际生效的模式
  * @param citations       本轮引用证据，未挂 RAG 或无命中时为空列表
- * @param ragDocCount     本轮通过资格过滤的召回分片数
+ * @param ragDocCount     本轮可用于引用的证据片段数——<b>与 citations 同源</b>。
+ *                        含两条来源：knowledge 模式的 Advisor 召回、auto 模式的知识检索 Tool 召回
+ *                        （见 RagRecallRecorder）。字段名沿用历史命名，语义已比原先更宽。
  * @param promptTokens    输入 token
  * @param completionTokens 输出 token
  * @param totalTokens     合计 token

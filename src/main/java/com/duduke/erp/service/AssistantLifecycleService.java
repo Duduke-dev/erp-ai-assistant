@@ -242,9 +242,9 @@ public class AssistantLifecycleService {
      */
     public StreamOutcome onComplete(StreamState state, ChatConversation conversation,
                                     String mode, long startedAt, AtomicBoolean finalized,
-                                    int basePromptTokens, int baseCompletionTokens) {
+                                    String answerOverride, int basePromptTokens, int baseCompletionTokens) {
         return finalize(state, conversation, mode, startedAt, finalized,
-                STATUS_COMPLETED, null, basePromptTokens, baseCompletionTokens);
+                STATUS_COMPLETED, null, answerOverride, basePromptTokens, baseCompletionTokens);
     }
 
     /**
@@ -258,7 +258,7 @@ public class AssistantLifecycleService {
         log.warn("流式回答中断：conversationId={}, mode={}",
                 conversation.getConversationId(), mode, error);
         return finalize(state, conversation, mode, startedAt, finalized,
-                STATUS_FAILED, error == null ? "生成失败" : error.getMessage(),
+                STATUS_FAILED, error == null ? "生成失败" : error.getMessage(), null,
                 basePromptTokens, baseCompletionTokens);
     }
 
@@ -274,7 +274,7 @@ public class AssistantLifecycleService {
         log.info("用户中断流式回答：conversationId={}, 已生成 {} 字",
                 conversation.getConversationId(), state.content().length());
         return finalize(state, conversation, mode, startedAt, finalized,
-                STATUS_CANCELLED, null, basePromptTokens, baseCompletionTokens);
+                STATUS_CANCELLED, null, null, basePromptTokens, baseCompletionTokens);
     }
 
     /**
@@ -286,7 +286,7 @@ public class AssistantLifecycleService {
      */
     private StreamOutcome finalize(StreamState state, ChatConversation conversation,
                                    String mode, long startedAt, AtomicBoolean finalized,
-                                   String status, String errorMessage,
+                                   String status, String errorMessage, String answerOverride,
                                    int basePromptTokens, int baseCompletionTokens) {
         if (!finalized.compareAndSet(false, true)) {
             // 已被其它终止路径收口（例如取消与完成并发），本次必须静默退出
@@ -316,12 +316,16 @@ public class AssistantLifecycleService {
             // 只在成功的轮次里校验引用：失败/取消时回答不完整，
             // 拿半截文本去提取编号会得到残缺引用，不如不发
             boolean usable = STATUS_COMPLETED.equals(status);
+            // 发布内容优先取 answerOverride：首轮缓冲门控拦截时（见 ChatController 的 DeltaGate），
+            // 下发给用户的是说明文本而非模型原文，**落库必须与之一致**——
+            // 否则界面显示「未查到数据」、库里存着编造内容，两者对不上，以后极难排查。
+            String published = answerOverride != null ? answerOverride : state.content();
             // 净化只在成功轮次做：取消/失败时文本是半截的，
             // 此时删旁白可能把仅有的一点内容也删掉，宁可原样保留（status 字段已标明）。
             // 必须在引用校验之前净化——旁白里的编号不该被当成引用。
             String answer = usable
-                    ? this.answerSanitizer.sanitize(state.content())
-                    : state.content();
+                    ? this.answerSanitizer.sanitize(published)
+                    : published;
             // 合并两条召回来源：
             //   knowledge 模式 —— Advisor 那条链路（元数据 / ThreadLocal 暂存）
             //   auto 模式      —— 知识检索 Tool 的暂存（见 RagRecallRecorder）
