@@ -166,6 +166,9 @@ class AssistantLifecycleServiceTest {
         // 净化器传真实实例而非 null：它是无依赖的纯文本规则，
         // 传 null 会让将来万一走到收口路径时直接 NPE，掩盖真正的问题
         return new AssistantLifecycleService(null, null,
+                // RagRecallRecorder 传**真实实例**而不是 null：它无依赖，且收口的 finally 会调它，
+                // 传 null 会让将来任何走到收口的用例直接 NPE，掩盖真正的问题
+                new com.duduke.erp.service.RagRecallRecorder(),
                 new com.duduke.erp.config.ChatProperties(),
                 new com.duduke.erp.service.AssistantAnswerSanitizer(),
                 new com.duduke.erp.service.BillingService(null, null, null, null, null, null));

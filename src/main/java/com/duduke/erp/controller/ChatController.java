@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 
 import com.duduke.erp.entity.dto.AskDTO;
 import com.duduke.erp.entity.vo.AskVO;
@@ -56,6 +57,15 @@ public class ChatController {
 
     /** 会话标识响应头。前端可在首帧到达前据此更新当前会话 */
     public static final String CONVERSATION_ID_HEADER = "X-Conversation-Id";
+
+    /**
+     * 回答里的方括号引用编号，如 {@code [1]}。
+     * <p>
+     * 只用于兜底判定「模型声称引用了资料，但一条证据都没有」——见
+     * {@code finishNormally} 里的说明。编号校验本身由 {@code RagCitationService} 负责，
+     * 这里不重复它的严格规则，宁可宽松：漏报只是少一条提示，误报会打扰用户。
+     */
+    private static final Pattern CITATION_PATTERN = Pattern.compile("\\[\\d{1,3}]");
 
     private final AssistantService assistantService;
 
@@ -216,6 +226,18 @@ public class ChatController {
                         .name(StreamEventType.WARNING.eventName())
                         .data(new StreamWarning(
                                 "本轮未查到业务数据：回答中的数字可能不是来自系统查询，请谨慎采信。")));
+            }
+            // 第二条兜底：回答里出现了 [编号]，但**一条证据都没有**——
+            // 说明那些编号是模型自己编的（既没有 Advisor 召回，也没有知识工具调用）。
+            // 判据用「citations 为空 + 回答含编号」而不是去查工具调用记录：
+            // citations 是引用校验的产物，它空着就等于「没有可验证的来源」，语义正好。
+            if ((outcome.citations() == null || outcome.citations().citations().isEmpty())
+                    && CITATION_PATTERN.matcher(
+                            state.content() == null ? "" : state.content()).find()) {
+                emitter.send(SseEmitter.event()
+                        .name(StreamEventType.WARNING.eventName())
+                        .data(new StreamWarning(
+                                "回答中的 [编号] 引用没有对应的资料检索记录，来源无法验证，请谨慎采信。")));
             }
             if (outcome.done() != null) {
                 emitter.send(SseEmitter.event()

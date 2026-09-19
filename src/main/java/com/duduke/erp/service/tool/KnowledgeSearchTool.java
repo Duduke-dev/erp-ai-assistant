@@ -1,14 +1,19 @@
 package com.duduke.erp.service.tool;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import com.duduke.erp.entity.vo.RagSearchResult;
 import com.duduke.erp.service.RagAnswerService;
+import com.duduke.erp.service.RagRecallRecorder;
 import com.duduke.erp.service.tool.trace.ToolTraceKeys;
 
 import lombok.RequiredArgsConstructor;
 
 import org.springframework.ai.chat.model.ToolContext;
+import org.springframework.ai.document.Document;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -22,11 +27,11 @@ import org.springframework.stereotype.Component;
  * 使用工具结果（2026-09-19 实际发生过：模型丢掉了已经查回的业务数据，答「现有资料无法回答」）；
  * 而且只能检索一次，做不到「粗查 → 据结果细查」。
  *
- * <h3>与业务 Tool 的差异</h3>
- * 它查的是<b>向量库</b>而非业务表，所以<b>返回格式化文本</b>（带 [编号] 与来源），
- * 而不是结构化行——模型需要的是可引用、可阅读的片段。
- * 也正因如此，调用它<b>不会</b>让 {@code BusinessDataTurnGuard} 认为「本轮拿到了业务数据」，
- * 这是正确的：知识不是业务数据。
+ * <h3>引用怎么来的</h3>
+ * 召回结果除了拼成文本给模型，还会写入 {@link RagRecallRecorder}（按 traceId 暂存），
+ * 收口时与 Advisor 那条链路的结果合并，供 {@code RagCitationService} 校验引用。
+ * <b>编号必须跨多次调用全局递增</b>——模型可能分两次检索，若各自从 [1] 起编，
+ * 引用会指向错误内容且不报错。所以这里用 {@code record} 返回的起始编号来编号。
  *
  * <h3>知识库从哪来</h3>
  * 工具签名里只有业务参数，请求体的知识库选择经 {@code ToolContext} 带入
@@ -42,7 +47,11 @@ public class KnowledgeSearchTool implements BusinessTool {
     /** 上限：给模型调速空间，但不能让它一次拉太多把上下文撑爆 */
     private static final int MAX_TOP_K = 10;
 
+    private static final String UNKNOWN_SOURCE = "未知来源";
+
     private final RagAnswerService ragAnswerService;
+
+    private final RagRecallRecorder recallRecorder;
 
     @Tool(name = ToolNames.SEARCH_KNOWLEDGE_BASE,
           description = "在企业知识库中检索资料，返回带 [编号] 的文档片段。"
@@ -64,11 +73,14 @@ public class KnowledgeSearchTool implements BusinessTool {
             return "知识库中没有检索到与该问题相关的内容。";
         }
 
+        // 先登记再编号：起始编号由已累计的数量决定，保证多次检索之间不撞号
+        int startIndex = this.recallRecorder.record(traceIdOf(toolContext), toDocuments(results));
+
         StringBuilder context = new StringBuilder();
         for (int index = 0; index < results.size(); index++) {
             RagSearchResult result = results.get(index);
-            context.append('[').append(index + 1).append("] 来源：")
-                    .append(result.source() == null ? "未知来源" : result.source())
+            context.append('[').append(startIndex + index).append("] 来源：")
+                    .append(result.source() == null ? UNKNOWN_SOURCE : result.source())
                     .append('\n')
                     .append(result.content())
                     .append("\n\n");
@@ -76,12 +88,39 @@ public class KnowledgeSearchTool implements BusinessTool {
         return context.toString().trim();
     }
 
+    /**
+     * 转成 {@link Document} 以便复用引用校验。
+     * <p>
+     * 只带 {@code source}：引用校验按<b>列表位置</b>匹配编号，不依赖额外元数据。
+     */
+    private List<Document> toDocuments(List<RagSearchResult> results) {
+        List<Document> documents = new ArrayList<>(results.size());
+        for (RagSearchResult result : results) {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("source", result.source() == null ? UNKNOWN_SOURCE : result.source());
+            documents.add(new Document(result.content(), metadata));
+        }
+        return documents;
+    }
+
     /** 从 ToolContext 取知识库 ID；缺失或类型不符都返回 null（检索侧会回落到默认库） */
     private Long knowledgeBaseIdOf(ToolContext toolContext) {
+        return longValueOf(toolContext, ToolTraceKeys.KNOWLEDGE_BASE_ID);
+    }
+
+    private String traceIdOf(ToolContext toolContext) {
         if (toolContext == null || toolContext.getContext() == null) {
             return null;
         }
-        Object value = toolContext.getContext().get(ToolTraceKeys.KNOWLEDGE_BASE_ID);
+        Object value = toolContext.getContext().get(ToolTraceKeys.TRACE_ID);
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private Long longValueOf(ToolContext toolContext, String key) {
+        if (toolContext == null || toolContext.getContext() == null) {
+            return null;
+        }
+        Object value = toolContext.getContext().get(key);
         return value instanceof Number number ? number.longValue() : null;
     }
 }

@@ -116,6 +116,9 @@ public class AssistantService {
 
     private final AssistantAnswerSanitizer answerSanitizer;
 
+    /** 知识检索 Tool 的召回暂存：auto 模式（工具式）的引用来源 */
+    private final RagRecallRecorder ragRecallRecorder;
+
     private final BillingService billingService;
 
     /**
@@ -165,6 +168,8 @@ public class AssistantService {
             // 线程复用，必须清理，否则下一次请求会读到本轮证据导致引用串档
             RagContextFormatter.clearRecalledDocuments();
             this.toolCallRecorder.clearTrace(traceId);
+            // 工具召回暂存是内存 Map：不清会随会话无限增长（不报错的内存泄漏）
+            this.ragRecallRecorder.clear(traceId);
         }
     }
 
@@ -217,7 +222,11 @@ public class AssistantService {
                 // （见 AssistantLifecycleService#clearChartState）。
                 // 放在这里清会引入 doFinally 与收口的先后依赖——顺序一旦相反，
                 // 收口就读不到数据，图表恒为 null 且不报错。
-                .doFinally(signal -> this.toolCallRecorder.clearTrace(traceId));
+                .doFinally(signal -> {
+                    this.toolCallRecorder.clearTrace(traceId);
+                    // 同 ask()：工具召回暂存必须随轮次结束清理
+                    this.ragRecallRecorder.clear(traceId);
+                });
     }
 
     /**
@@ -447,7 +456,12 @@ public class AssistantService {
                 : response.getResult().getOutput().getText();
         String answer = rawAnswer == null ? null : this.answerSanitizer.sanitize(rawAnswer);
 
-        List<Document> recalled = RagContextFormatter.recalledDocuments();
+        // 合并两条召回来源：knowledge 走 Advisor 的 ThreadLocal 暂存；
+        // auto 走知识检索 Tool 的暂存（auto 不挂 Advisor，所以两者不会同时有值）
+        List<Document> recalled = java.util.stream.Stream
+                .concat(RagContextFormatter.recalledDocuments().stream(),
+                        this.ragRecallRecorder.getAll(traceId).stream())
+                .toList();
         List<RagCitation> citations = this.ragCitationService.validate(answer, recalled);
         if (log.isDebugEnabled()) {
             log.debug("引用校验：召回={}，命中={}", recalled.size(), citations.size());

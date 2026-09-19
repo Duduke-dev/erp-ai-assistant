@@ -69,6 +69,9 @@ public class AssistantLifecycleService {
 
     private final RagCitationService ragCitationService;
 
+    /** 知识检索 Tool 的召回暂存：auto 模式（工具式）的引用来源 */
+    private final RagRecallRecorder ragRecallRecorder;
+
     private final ChatProperties chatProperties;
 
     private final AssistantAnswerSanitizer answerSanitizer;
@@ -319,8 +322,17 @@ public class AssistantLifecycleService {
             String answer = usable
                     ? this.answerSanitizer.sanitize(state.content())
                     : state.content();
+            // 合并两条召回来源：
+            //   knowledge 模式 —— Advisor 那条链路（元数据 / ThreadLocal 暂存）
+            //   auto 模式      —— 知识检索 Tool 的暂存（见 RagRecallRecorder）
+            // 两者不会同时有值（auto 不挂 Advisor、knowledge 不挂 Tool），所以编号不冲突；
+            // 顺序就是引用编号的依据，必须与工具返回给模型的编号一致。
+            List<Document> recalled = java.util.stream.Stream
+                    .concat(state.recalled().stream(),
+                            this.ragRecallRecorder.getAll(state.traceId()).stream())
+                    .toList();
             List<RagCitation> citations = usable
-                    ? this.ragCitationService.validate(answer, state.recalled())
+                    ? this.ragCitationService.validate(answer, recalled)
                     : List.of();
             String citationsJson = encodeQuietly(citations);
             int ragDocCount = usable ? state.recalled().size() : 0;
@@ -367,6 +379,8 @@ public class AssistantLifecycleService {
             }
             // 线程复用，必须清理，否则下一次请求会读到本轮证据导致引用串档
             RagContextFormatter.clearRecalledDocuments();
+            // 工具召回暂存是内存 Map：不清会随会话无限增长（内存泄漏，且不报错）
+            this.ragRecallRecorder.clear(state.traceId());
         }
     }
 
