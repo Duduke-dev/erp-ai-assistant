@@ -340,8 +340,11 @@ public class AssistantLifecycleService {
                     promptTokens + completionTokens);
 
             if (STATUS_FAILED.equals(status)) {
+                // errorMessage 就是 onError 传进来的原始异常摘要（落库用的是同一个值），
+                // 可开关地一并下发给前端——默认关，见 ChatProperties#exposeErrorDetail
                 return new StreamOutcome(null, null, null,
-                        new StreamError("STREAM_ERROR", "回答生成失败，请稍后重试"), true);
+                        new StreamError("STREAM_ERROR", "回答生成失败，请稍后重试",
+                                this.chatProperties.isExposeErrorDetail() ? errorMessage : null), true);
             }
 
             StreamCitations citationEvent = citations.isEmpty()
@@ -355,7 +358,8 @@ public class AssistantLifecycleService {
             // 否则 SSE 连接会以未处理异常收场。降级为 error 事件。
             log.error("流式收口落库失败：conversationId={}", conversation.getConversationId(), e);
             return new StreamOutcome(null, null, null,
-                    new StreamError("PERSIST_ERROR", "回答已生成但保存失败，请重试"), true);
+                    new StreamError("PERSIST_ERROR", "回答已生成但保存失败，请重试",
+                            this.chatProperties.isExposeErrorDetail() ? rootMessage(e) : null), true);
         }
         finally {
             if (restored) {
@@ -364,6 +368,20 @@ public class AssistantLifecycleService {
             // 线程复用，必须清理，否则下一次请求会读到本轮证据导致引用串档
             RagContextFormatter.clearRecalledDocuments();
         }
+    }
+
+    /**
+     * 取最内层异常的消息，供开发期的 error detail 使用。
+     * <p>
+     * 取根因而不是最外层：外层多是包装异常（{@code DataAccessException}、{@code CompletionException}），
+     * 真正有诊断价值的信息——唯一约束冲突、连接被拒、字段不存在——都在最内层。
+     */
+    private static String rootMessage(Throwable error) {
+        Throwable cause = error;
+        while (cause.getCause() != null && cause.getCause() != cause) {
+            cause = cause.getCause();
+        }
+        return cause.getMessage();
     }
 
     /**

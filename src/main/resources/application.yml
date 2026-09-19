@@ -63,7 +63,12 @@ spring:
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
       chat:
         options:
-          model: qwen-plus
+          # deepseek-v4-pro-0813：百炼上的 DeepSeek 旗舰推理模型。
+          # 与原来一样走同一个 base-url 与同一个 DASHSCOPE_API_KEY（百炼的模型 ID），
+          # 所以 base-url、Key、embedding 都不需要跟着改，向量也不必重建
+          # （模型指纹只对 embedding 生效）。
+          # 注意它是**推理模型**：支持 Function Calling，但思考模式会额外消耗 token。
+          model: deepseek-v4-pro-0813
       embedding:
         options:
           model: text-embedding-v4
@@ -134,6 +139,10 @@ app:
     title-max-length: 40
     max-question-length: 4000
     max-messages-per-conversation: 500
+    # 是否在流式错误事件（StreamError.detail）里回传原始异常摘要。
+    # 本地开发开：SSE 只给前端一条通用文案，没有 detail 就得翻服务端日志才能对上账。
+    # ⚠️ 生产必须覆盖为 false —— 原始异常可能含表名、SQL 片段、内网地址与文件路径。
+    expose-error-detail: true
 
   # RAG 检索参数
   # 阈值来自 2026-09-13 的实测标定（DashScope text-embedding-v4，1024 维）：

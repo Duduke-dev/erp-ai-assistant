@@ -12,8 +12,10 @@ import com.duduke.erp.entity.vo.ConversationVO;
 import com.duduke.erp.entity.vo.StreamDelta;
 import com.duduke.erp.entity.vo.StreamError;
 import com.duduke.erp.entity.vo.StreamEventType;
+import com.duduke.erp.entity.vo.StreamWarning;
 import com.duduke.erp.service.AssistantService;
 import com.duduke.erp.service.AssistantLifecycleService;
+import com.duduke.erp.service.BusinessDataTurnGuard;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import lombok.RequiredArgsConstructor;
@@ -58,6 +60,9 @@ public class ChatController {
     private final AssistantService assistantService;
 
     private final AssistantLifecycleService assistantLifecycleService;
+
+    /** 用于流式收尾时判定「本该查库但本轮没拿到数据」——见 finishNormally 里的说明 */
+    private final BusinessDataTurnGuard businessDataTurnGuard;
 
     /**
      * 提问（非流式）。返回完整回答、引用证据与 token 用量。
@@ -198,6 +203,20 @@ public class ChatController {
                         .name(StreamEventType.CITATIONS.eventName())
                         .data(outcome.citations()));
             }
+            // 数据缺失提示：问题是「要业务数据」的类型，但本轮没有任何非空 Tool 结果。
+            //
+            // 为什么只提示、不拦截：流式路径没有数据门控（BusinessDataTurnGuard 类注释里
+            // 「刻意不做流式门控」），模型完全可能不调工具、直接凭训练数据编出一份格式漂亮的表格。
+            // 真正拦住它要改 SSE 管线（暂存首轮分片、确认有数据才放行），属独立变更；
+            // 在做到那一步之前，至少要**让用户知道这轮没查到数据**，而不是默默相信那些数字。
+            if (this.businessDataTurnGuard.requiresCurrentBusinessData(
+                    preparation.mode(), preparation.question())
+                    && !this.businessDataTurnGuard.hasBusinessResult(preparation.traceId())) {
+                emitter.send(SseEmitter.event()
+                        .name(StreamEventType.WARNING.eventName())
+                        .data(new StreamWarning(
+                                "本轮未查到业务数据：回答中的数字可能不是来自系统查询，请谨慎采信。")));
+            }
             if (outcome.done() != null) {
                 emitter.send(SseEmitter.event()
                         .name(StreamEventType.DONE.eventName())
@@ -220,8 +239,10 @@ public class ChatController {
         if (!outcome.handoff()) {
             return;
         }
+        // detail 传 null：这里是「收口返回了失败但没带错误事件」的兜底，
+        // 本来就没有原始异常可给（有异常的情况由 AssistantLifecycleService 填充）
         StreamError event = outcome.error() == null
-                ? new StreamError("STREAM_ERROR", "回答生成失败，请稍后重试")
+                ? new StreamError("STREAM_ERROR", "回答生成失败，请稍后重试", null)
                 : outcome.error();
         try {
             emitter.send(SseEmitter.event()

@@ -28,6 +28,19 @@ public enum StreamEventType {
     /** 引用证据，流结束时一次性下发。data 为 {@link StreamCitations} */
     CITATIONS("citations"),
 
+    /**
+     * 数据缺失提示，在完成事件之前下发。
+     * <p>
+     * 触发条件：问题属于「要业务数据」的类型（见 {@code BusinessDataTurnGuard}），
+     * 但本轮**没有拿到任何非空 Tool 结果**。
+     * <p>
+     * 为什么需要它：流式路径没有数据门控（见 {@code BusinessDataTurnGuard} 类注释
+     * 「刻意不做流式门控」），模型可以选择不调工具、直接凭训练数据编。
+     * 编出来的数字格式往往比真答案还规整，用户无从分辨。
+     * 这里不做拦截（那要改 SSE 管线），只**把事实告诉用户**。
+     */
+    WARNING("warning"),
+
     /** 正常结束。data 为 {@link StreamDone} */
     DONE("done"),
 

@@ -284,8 +284,20 @@ public class AssistantService {
         // 图表功能已废弃：改为「让模型直接输出 Markdown，由前端 MarkdownViewer 渲染」。
         // 这里因此不再追加图表 Tool——模型不会声明图表方案，收口侧的 compileChart 也就永不触发。
         //
-        // 遗留：service/chart 包（7 个类）与收口侧的图表代码尚未删除，属待清理的死代码。
         List<ToolCallback> tools = new ArrayList<>(visible);
+
+        // ⚠️ 这里**刻意不做** tool_choice=required 的强制工具调用。
+        //
+        // 动机是堵住「模型跳过查询直接编数字」，实现方式与实测结果：
+        //   DashScope 兼容端点**接受** required 这个取值（不报错），但模型行为完全失控——
+        //   实测问「哪些物料库存低于安全库存」，它连续调用 getTicketDetail（售后工单，毫不相干），
+        //   工具流水涨到 72 页、token 全烧在调用上，**最终没有任何回答文本**（SSE 只有 meta 事件）。
+        //   → 不是"强制调工具"，而是"陷入调用循环"，比原来的问题更糟。
+        //
+        // 结论：这条路在本项目走不通。真正的解法是流式首轮缓冲 + 数据门控
+        // （暂存分片、确认有数据才放行），需要改 SSE 管线，属独立变更。
+        // 在那之前，由 prompt 约束（businessPrompt 第 6 条）+ StreamWarning 提示兜底。
+
         // tools(Object...) 是 Spring AI 2.0 的非弃用入口（toolCallbacks(List) 自 2.0.0 起弃用待移除）。
         // 传 ToolCallback[] 与旧写法等价：DefaultChatClient 会把数组元素并入同一个 toolCallbacks 列表，
         // 因此下游 options.getToolCallbacks() 仍能取到这批 Tool。

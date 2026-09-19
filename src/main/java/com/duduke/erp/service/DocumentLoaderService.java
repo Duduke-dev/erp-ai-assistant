@@ -73,7 +73,11 @@ public class DocumentLoaderService {
         try (DigestInputStream digestStream = new DigestInputStream(inputStream, digest)) {
             List<Document> chunks = readAndSplit(digestStream, metadata.sourceName());
             if (chunks.isEmpty()) {
-                throw new IllegalArgumentException("文档解析后没有可用内容：" + metadata.sourceName());
+                // 文案要给出「可能的原因 + 怎么办」：只说"没有可用内容"，用户不知道下一步做什么。
+                // 实际最常见的原因是扫描件 PDF（只有图像层、没有文字层）。
+                throw new IllegalArgumentException(
+                        "文档解析后没有可用内容（可能是扫描件、纯图片或空文件，需先 OCR 转为文本）："
+                                + metadata.sourceName());
             }
             beforeEmbedding.run();
             addWithMetadata(chunks, metadata);

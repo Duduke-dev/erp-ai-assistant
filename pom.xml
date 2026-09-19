@@ -201,6 +201,25 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
+            <!-- 集成测试（*IT）由 failsafe 在 verify 阶段执行。
+                 为什么必须显式声明：surefire 默认只跑 *Test / Test* / *Tests / *TestCase，
+                 而 RagEvalIT 以 IT 结尾——不配这个插件，它**永远不会被任何生命周期执行**，
+                 只能手动 -Dtest=RagEvalIT，等于「评测跑不跑全凭自觉」，门禁形同虚设。
+                 不需要写 includes：failsafe 默认就匹配 **/*IT.java。
+                 代价：mvn verify（含 install / deploy）会跑 RAG 评测，约 73 秒 + 数十次 API 调用。
+                 跳过用 -DskipITs；无 Key 时测试内部已有 assumeTrue 兜底。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 
