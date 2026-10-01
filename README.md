@@ -409,7 +409,6 @@ mvn verify -DskipITs     # 跳过 IT
 | **图表可视化** | 已移除（服务端与前端均不再提供） |
 | **Reranker** | 未实现，仅预留接口 |
 | **Query Rewrite 模型润色** | 已实现但经对照实验否决，默认固定为 `rule` |
-| **前端 `echarts` 依赖** | 图表移除后已无任何引用，属可清理的遗留依赖 |
 | **`docs/`、`docker-compose.yml`、`application-local.yml`** | 均未纳入版本控制（含口令或为本地规划文档），新环境需自行准备 |
 
 ---
